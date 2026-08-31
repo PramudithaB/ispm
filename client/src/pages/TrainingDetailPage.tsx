@@ -1,0 +1,271 @@
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { trainingService } from '../services/api';
+import { ITrainingModule } from '../types';
+import { Badge } from '../components/common/Badge';
+import { LoadingSpinner } from '../components/common/LoadingSpinner';
+import {
+  GraduationCap,
+  ArrowLeft,
+  CheckCircle2,
+  Clock,
+  ShieldCheck,
+  AlertTriangle,
+  BookOpen,
+  Sparkles,
+  ArrowRight,
+  HelpCircle,
+  Play,
+  RotateCcw,
+} from 'lucide-react';
+
+export const TrainingDetailPage: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+
+  const [module, setModule] = useState<ITrainingModule | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    const fetchTraining = async () => {
+      if (!id) return;
+      setIsLoading(true);
+      try {
+        const res = await trainingService.getTrainingById(id);
+        if (res.data.success) {
+          setModule(res.data.training);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchTraining();
+  }, [id]);
+
+  if (isLoading) {
+    return <LoadingSpinner message="Loading training course content..." />;
+  }
+
+  if (!module) {
+    return (
+      <div className="bg-white rounded-2xl p-12 text-center border border-slate-200">
+        <AlertTriangle className="w-12 h-12 text-rose-500 mx-auto mb-3" />
+        <h3 className="text-base font-bold text-slate-800">Training Module Not Found</h3>
+        <Link
+          to="/training"
+          className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-xl text-xs font-bold"
+        >
+          <ArrowLeft className="w-4 h-4" /> Back to Training Library
+        </Link>
+      </div>
+    );
+  }
+
+  const isCompleted = module.progress?.status === 'Completed';
+  const score = module.progress?.score || 0;
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-200">
+      {/* Back button */}
+      <button
+        onClick={() => navigate('/training')}
+        className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-brand-600 transition-colors"
+      >
+        <ArrowLeft className="w-4 h-4" /> Back to Training Library
+      </button>
+
+      {/* Course Header Banner */}
+      <div className="rounded-3xl bg-gradient-to-br from-hemas-navy via-slate-900 to-brand-950 p-6 sm:p-8 text-white shadow-xl">
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <Badge variant="purple" size="sm">
+            {module.category}
+          </Badge>
+          <Badge variant="teal" size="sm">
+            {module.durationMinutes} Minutes
+          </Badge>
+          {isCompleted && (
+            <Badge variant="success" size="sm" dot>
+              Passed with {score}%
+            </Badge>
+          )}
+        </div>
+
+        <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+          {module.title}
+        </h1>
+
+        <p className="text-xs sm:text-sm text-slate-300 mt-2 leading-relaxed max-w-2xl">
+          {module.description}
+        </p>
+
+        <div className="flex flex-wrap items-center gap-4 mt-6 pt-6 border-t border-white/10 text-xs text-slate-300">
+          <div className="flex items-center gap-1.5">
+            <Clock className="w-4 h-4 text-brand-400" />
+            <span>Estimated Duration: {module.durationMinutes} mins</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <HelpCircle className="w-4 h-4 text-emerald-400" />
+            <span>Passing Grade: {module.passingScore}% on Knowledge Quiz</span>
+          </div>
+          {module.progress?.attempts ? (
+            <div className="flex items-center gap-1.5">
+              <RotateCcw className="w-4 h-4 text-purple-400" />
+              <span>Attempts Taken: {module.progress.attempts}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Course Introduction */}
+      <div className="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200/80 shadow-card">
+        <h2 className="text-base font-bold text-slate-900 mb-3 flex items-center gap-2">
+          <BookOpen className="w-5 h-5 text-brand-600" />
+          Course Introduction
+        </h2>
+        <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+          {module.content.introduction}
+        </p>
+      </div>
+
+      {/* Structured Learning Sections */}
+      <div className="space-y-4">
+        <h2 className="text-base font-bold text-slate-900 flex items-center gap-2 px-1">
+          <ShieldCheck className="w-5 h-5 text-brand-600" />
+          Core Security Learning Modules
+        </h2>
+
+        {module.content.sections.map((sec, idx) => (
+          <div
+            key={idx}
+            className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-card"
+          >
+            <h3 className="text-sm font-bold text-slate-900 mb-2">
+              {sec.title}
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+              {sec.body}
+            </p>
+
+            {sec.highlights && sec.highlights.length > 0 && (
+              <div className="mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200/60">
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Key Rules to Remember:
+                </p>
+                <ul className="space-y-1.5 text-xs text-slate-700">
+                  {sec.highlights.map((h, hIdx) => (
+                    <li key={hIdx} className="flex items-start gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <span>{h}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Clinical Hospital Security Scenarios */}
+      {module.content.examples && module.content.examples.length > 0 && (
+        <div className="space-y-4">
+          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2 px-1">
+            <AlertTriangle className="w-5 h-5 text-amber-500" />
+            Hospital Clinical Security Scenarios & Correct Actions
+          </h2>
+
+          <div className="grid grid-cols-1 gap-4">
+            {module.content.examples.map((ex, exIdx) => (
+              <div
+                key={exIdx}
+                className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-card"
+              >
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <span className="text-xs font-bold text-slate-800">
+                    Scenario #{exIdx + 1}
+                  </span>
+                  <Badge
+                    variant={
+                      ex.riskLevel === 'Critical'
+                        ? 'danger'
+                        : ex.riskLevel === 'High'
+                        ? 'warning'
+                        : 'neutral'
+                    }
+                    size="sm"
+                  >
+                    Risk: {ex.riskLevel}
+                  </Badge>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 font-medium mb-3">
+                  "{ex.scenario}"
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-900">
+                  <p className="font-bold flex items-center gap-1.5 text-emerald-800 mb-1">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Required Clinical Protocol:
+                  </p>
+                  <p>{ex.correctAction}</p>
+                </div>
+
+                {ex.clinicalImpact && (
+                  <p className="text-[11px] text-slate-500 mt-2 italic">
+                    Clinical Impact: {ex.clinicalImpact}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Key Takeaways Card */}
+      {module.content.keyTakeaways && (
+        <div className="bg-gradient-to-br from-brand-50 to-blue-50/50 rounded-2xl p-6 border border-brand-200/80 shadow-card">
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles className="w-5 h-5 text-brand-600" />
+            <h3 className="text-sm font-bold text-brand-950">
+              Module Summary & Key Takeaways
+            </h3>
+          </div>
+          <ul className="space-y-2 text-xs text-slate-800">
+            {module.content.keyTakeaways.map((item, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0 mt-1.5" />
+                <span className="font-medium">{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* CTA Box to Start/Retake Quiz */}
+      <div className="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200/80 shadow-card flex flex-col sm:flex-row items-center justify-between gap-6">
+        <div>
+          <h3 className="text-base font-bold text-slate-900">
+            {isCompleted ? 'Review Knowledge Quiz' : 'Ready for the Assessment?'}
+          </h3>
+          <p className="text-xs text-slate-500 mt-1">
+            Passing requirement: {module.passingScore}% minimum score. Immediate automated grading and explanations.
+          </p>
+          {isCompleted && (
+            <p className="text-xs font-semibold text-emerald-600 mt-1">
+              ✓ Module completed. You can retake the quiz anytime to refresh your knowledge.
+            </p>
+          )}
+        </div>
+
+        <Link
+          to={`/training/${module._id}/quiz`}
+          className="px-6 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold shadow-lg shadow-brand-500/20 transition-all flex items-center gap-2 shrink-0"
+        >
+          <Play className="w-4 h-4" />
+          <span>{isCompleted ? 'Retake Quiz' : 'Start Knowledge Quiz'}</span>
+          <ArrowRight className="w-4 h-4" />
+        </Link>
+      </div>
+    </div>
+  );
+};

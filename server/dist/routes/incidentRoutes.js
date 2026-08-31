@@ -1,0 +1,14 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const incidentController_1 = require("../controllers/incidentController");
+const auth_1 = require("../middleware/auth");
+const rbac_1 = require("../middleware/rbac");
+const router = (0, express_1.Router)();
+router.use(auth_1.authenticate);
+router.get('/', incidentController_1.getIncidents);
+router.get('/:id', incidentController_1.getIncidentById);
+router.post('/', incidentController_1.reportIncident);
+router.patch('/:id/status', rbac_1.requireAdmin, incidentController_1.updateIncidentStatus);
+router.patch('/:id', rbac_1.requireAdmin, incidentController_1.updateIncidentStatus);
+exports.default = router;

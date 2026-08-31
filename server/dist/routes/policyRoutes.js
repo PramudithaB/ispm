@@ -1,0 +1,17 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const policyController_1 = require("../controllers/policyController");
+const auth_1 = require("../middleware/auth");
+const rbac_1 = require("../middleware/rbac");
+const router = (0, express_1.Router)();
+router.use(auth_1.authenticate);
+router.get('/', policyController_1.getPolicies);
+router.get('/:id', policyController_1.getPolicyById);
+router.post('/', rbac_1.requireAdmin, policyController_1.createPolicy);
+router.put('/:id', rbac_1.requireAdmin, policyController_1.updatePolicy);
+router.post('/:id/publish', rbac_1.requireAdmin, policyController_1.publishPolicy);
+router.post('/:id/archive', rbac_1.requireAdmin, policyController_1.archivePolicy);
+router.post('/:id/acknowledge', policyController_1.acknowledgePolicy);
+router.get('/:id/acknowledgements', rbac_1.requireDeptHeadOrAdmin, policyController_1.getPolicyAcknowledgements);
+exports.default = router;

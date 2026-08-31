@@ -1,0 +1,13 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const complianceController_1 = require("../controllers/complianceController");
+const auth_1 = require("../middleware/auth");
+const rbac_1 = require("../middleware/rbac");
+const router = (0, express_1.Router)();
+router.use(auth_1.authenticate);
+router.get('/my', complianceController_1.getMyCompliance);
+router.get('/summary', rbac_1.requireDeptHeadOrAdmin, complianceController_1.getComplianceSummary);
+router.get('/department', rbac_1.requireDeptHeadOrAdmin, complianceController_1.getDepartmentCompliance);
+router.get('/department/:deptId', rbac_1.requireDeptHeadOrAdmin, complianceController_1.getDepartmentStaffCompliance);
+exports.default = router;
