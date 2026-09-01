@@ -1,44 +1,50 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAuditLogs = void 0;
-const AuditLog_1 = require("../models/AuditLog");
+const db_1 = require("../config/db");
 const getAuditLogs = async (req, res) => {
     try {
         const { action, module, userEmail, startDate, endDate, search, limit = '100', page = '1' } = req.query;
-        const filter = {};
+        const where = {};
         if (action)
-            filter.action = action;
+            where.action = action;
         if (module)
-            filter.module = module;
+            where.module = module;
         if (userEmail)
-            filter.userEmail = new RegExp(userEmail, 'i');
+            where.userEmail = { contains: userEmail };
         if (startDate || endDate) {
-            filter.timestamp = {};
+            where.timestamp = {};
             if (startDate)
-                filter.timestamp.$gte = new Date(startDate);
+                where.timestamp.gte = new Date(startDate);
             if (endDate)
-                filter.timestamp.$lte = new Date(endDate);
+                where.timestamp.lte = new Date(endDate);
         }
         if (search) {
-            const searchRegex = new RegExp(search, 'i');
-            filter.$or = [
-                { action: searchRegex },
-                { module: searchRegex },
-                { userEmail: searchRegex },
-                { ipAddress: searchRegex },
-                { entityId: searchRegex },
+            const q = String(search);
+            where.OR = [
+                { action: { contains: q } },
+                { module: { contains: q } },
+                { userEmail: { contains: q } },
+                { ipAddress: { contains: q } },
+                { entityId: { contains: q } },
             ];
         }
         const pageNum = parseInt(page, 10) || 1;
         const limitNum = parseInt(limit, 10) || 100;
         const skip = (pageNum - 1) * limitNum;
         const [logs, total] = await Promise.all([
-            AuditLog_1.AuditLog.find(filter)
-                .populate('userId', 'fullName employeeId position')
-                .sort({ timestamp: -1 })
-                .skip(skip)
-                .limit(limitNum),
-            AuditLog_1.AuditLog.countDocuments(filter),
+            db_1.prisma.auditLog.findMany({
+                where,
+                include: {
+                    user: {
+                        select: { id: true, fullName: true, employeeId: true, position: true },
+                    },
+                },
+                orderBy: { timestamp: 'desc' },
+                skip,
+                take: limitNum,
+            }),
+            db_1.prisma.auditLog.count({ where }),
         ]);
         res.status(200).json({
             success: true,
@@ -46,13 +52,17 @@ const getAuditLogs = async (req, res) => {
             page: pageNum,
             totalPages: Math.ceil(total / limitNum),
             count: logs.length,
-            logs,
+            logs: logs.map((l) => ({
+                ...l,
+                _id: l.id,
+                user: l.user ? { ...l.user, _id: l.user.id } : null,
+            })),
         });
     }
     catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch audit trail records.',
+            message: 'Failed to fetch audit trail records from MySQL.',
             error: error.message,
         });
     }

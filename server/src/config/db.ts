@@ -1,44 +1,37 @@
-import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import { config } from './env';
+import { PrismaClient } from '@prisma/client';
 
-let mongoServer: MongoMemoryServer | null = null;
+declare global {
+  // Allow global `prisma` across hot reloads in development
+  var prismaClient: PrismaClient | undefined;
+}
 
-export const connectDB = async (): Promise<string> => {
-  let uri = config.mongoUri;
+export const prisma =
+  global.prismaClient ||
+  new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+  });
 
-  if (!uri) {
-    console.log('ℹ️  No MONGODB_URI provided in .env. Initializing in-memory embedded MongoDB instance...');
-    mongoServer = await MongoMemoryServer.create();
-    uri = mongoServer.getUri();
-  }
+if (process.env.NODE_ENV !== 'production') {
+  global.prismaClient = prisma;
+}
 
+export const connectDB = async (): Promise<void> => {
   try {
-    await mongoose.connect(uri);
-    console.log(`✅ MongoDB Connected successfully to: ${uri.startsWith('mongodb+srv') ? 'MongoDB Atlas Cloud' : 'Embedded / Local MongoDB'}`);
-    return uri;
+    await prisma.$connect();
+    // Test connection with a lightweight query
+    await prisma.$queryRaw`SELECT 1`;
+    console.log('✅ MySQL Database Connected successfully via Prisma ORM');
   } catch (error) {
-    console.error('❌ MongoDB Connection Error:', error);
-    if (!mongoServer) {
-      console.log('⚠️ Falling back to embedded MongoDB instance...');
-      mongoServer = await MongoMemoryServer.create();
-      uri = mongoServer.getUri();
-      await mongoose.connect(uri);
-      console.log('✅ Connected to embedded fallback MongoDB instance');
-      return uri;
-    }
+    console.error('❌ MySQL Connection Error:', error);
     throw error;
   }
 };
 
 export const disconnectDB = async (): Promise<void> => {
   try {
-    await mongoose.disconnect();
-    if (mongoServer) {
-      await mongoServer.stop();
-    }
-    console.log('🔌 MongoDB Disconnected');
+    await prisma.$disconnect();
+    console.log('🔌 MySQL Database Disconnected');
   } catch (error) {
-    console.error('Error disconnecting MongoDB:', error);
+    console.error('Error disconnecting MySQL:', error);
   }
 };

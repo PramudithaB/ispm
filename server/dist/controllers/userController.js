@@ -5,44 +5,61 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.unlockUser = exports.updateUser = exports.createUser = exports.getUserById = exports.getUsers = void 0;
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
-const User_1 = require("../models/User");
+const db_1 = require("../config/db");
 const auditService_1 = require("../services/auditService");
 const getUsers = async (req, res) => {
     try {
-        const { department, role, search, isActive } = req.query;
-        const filter = {};
-        if (department)
-            filter.department = department;
+        const { role, department, search, isActive } = req.query;
+        const where = {};
         if (role)
-            filter.role = role;
+            where.role = role;
+        if (department)
+            where.departmentId = department;
         if (isActive !== undefined)
-            filter.isActive = isActive === 'true';
+            where.isActive = isActive === 'true';
         if (search) {
-            const searchRegex = new RegExp(search, 'i');
-            filter.$or = [
-                { fullName: searchRegex },
-                { email: searchRegex },
-                { employeeId: searchRegex },
-                { position: searchRegex },
+            const q = String(search);
+            where.OR = [
+                { fullName: { contains: q } },
+                { email: { contains: q } },
+                { employeeId: { contains: q } },
+                { position: { contains: q } },
             ];
         }
-        // If user is Department Head, constrain to their department only
-        if (req.user?.role === 'DEPARTMENT_HEAD' && req.user.department) {
-            filter.department = req.user.department;
-        }
-        const users = await User_1.User.find(filter)
-            .populate('department')
-            .sort({ createdAt: -1 });
+        const users = await db_1.prisma.user.findMany({
+            where,
+            select: {
+                id: true,
+                employeeId: true,
+                fullName: true,
+                email: true,
+                role: true,
+                departmentId: true,
+                department: true,
+                site: true,
+                position: true,
+                isActive: true,
+                failedLoginAttempts: true,
+                lockUntil: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+            orderBy: { createdAt: 'desc' },
+        });
         res.status(200).json({
             success: true,
             count: users.length,
-            users,
+            users: users.map((u) => ({
+                ...u,
+                _id: u.id,
+                department: u.department ? { ...u.department, _id: u.department.id } : null,
+            })),
         });
     }
     catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch users.',
+            message: 'Failed to fetch users from MySQL.',
             error: error.message,
         });
     }
@@ -50,17 +67,42 @@ const getUsers = async (req, res) => {
 exports.getUsers = getUsers;
 const getUserById = async (req, res) => {
     try {
-        const user = await User_1.User.findById(req.params.id).populate('department');
+        const user = await db_1.prisma.user.findUnique({
+            where: { id: req.params.id },
+            select: {
+                id: true,
+                employeeId: true,
+                fullName: true,
+                email: true,
+                role: true,
+                departmentId: true,
+                department: true,
+                site: true,
+                position: true,
+                isActive: true,
+                failedLoginAttempts: true,
+                lockUntil: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+        });
         if (!user) {
             res.status(404).json({ success: false, message: 'User not found.' });
             return;
         }
-        res.status(200).json({ success: true, user });
+        res.status(200).json({
+            success: true,
+            user: {
+                ...user,
+                _id: user.id,
+                department: user.department ? { ...user.department, _id: user.department.id } : null,
+            },
+        });
     }
     catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch user.',
+            message: 'Failed to fetch user details.',
             error: error.message,
         });
     }
@@ -68,7 +110,7 @@ const getUserById = async (req, res) => {
 exports.getUserById = getUserById;
 const createUser = async (req, res) => {
     try {
-        const { employeeId, fullName, email, password, role, department, site, position, } = req.body;
+        const { employeeId, fullName, email, password, role, department, position, site } = req.body;
         if (!employeeId || !fullName || !email || !password) {
             res.status(400).json({
                 success: false,
@@ -76,49 +118,58 @@ const createUser = async (req, res) => {
             });
             return;
         }
-        const existingEmail = await User_1.User.findOne({ email: email.toLowerCase().trim() });
+        const normalizedEmail = email.toLowerCase().trim();
+        const normalizedEmpId = employeeId.toUpperCase().trim();
+        const existingEmail = await db_1.prisma.user.findUnique({ where: { email: normalizedEmail } });
         if (existingEmail) {
-            res.status(409).json({
-                success: false,
-                message: 'A user with this email address already exists.',
-            });
+            res.status(409).json({ success: false, message: 'Email address already exists.' });
             return;
         }
-        const existingEmpId = await User_1.User.findOne({ employeeId: employeeId.toUpperCase().trim() });
+        const existingEmpId = await db_1.prisma.user.findUnique({ where: { employeeId: normalizedEmpId } });
         if (existingEmpId) {
-            res.status(409).json({
-                success: false,
-                message: 'A user with this Employee ID already exists.',
-            });
+            res.status(409).json({ success: false, message: 'Employee ID already exists.' });
             return;
         }
         const passwordHash = await bcryptjs_1.default.hash(password, 10);
-        const newUser = await User_1.User.create({
-            employeeId: employeeId.toUpperCase().trim(),
-            fullName: fullName.trim(),
-            email: email.toLowerCase().trim(),
-            passwordHash,
-            role: role || 'STAFF',
-            department: department || null,
-            site: site || 'Hemas Hospital Wattala',
-            position: position || 'Staff Member',
-            isActive: true,
+        const newUser = await db_1.prisma.user.create({
+            data: {
+                employeeId: normalizedEmpId,
+                fullName: fullName.trim(),
+                email: normalizedEmail,
+                passwordHash,
+                role: role || 'STAFF',
+                departmentId: department || null,
+                site: site?.trim() || 'Hemas Hospital Wattala',
+                position: position?.trim() || 'Clinical Staff',
+                isActive: true,
+            },
+            include: { department: true },
         });
         await (0, auditService_1.logAudit)({
-            userId: req.user?._id,
-            userEmail: req.user?.email || 'SYSTEM',
-            userRole: req.user?.role,
+            userId: req.user.id,
+            userEmail: req.user.email,
+            userRole: req.user.role,
             action: 'USER_CREATED',
             module: 'USERS',
-            entityId: newUser._id.toString(),
-            metadata: { newUserId: newUser._id, employeeId: newUser.employeeId, role: newUser.role },
+            entityId: newUser.id,
+            metadata: { createdUserEmail: newUser.email, role: newUser.role },
             req,
         });
-        const populatedUser = await User_1.User.findById(newUser._id).populate('department');
         res.status(201).json({
             success: true,
             message: 'User created successfully.',
-            user: populatedUser,
+            user: {
+                _id: newUser.id,
+                id: newUser.id,
+                employeeId: newUser.employeeId,
+                fullName: newUser.fullName,
+                email: newUser.email,
+                role: newUser.role,
+                department: newUser.department ? { ...newUser.department, _id: newUser.department.id } : null,
+                site: newUser.site,
+                position: newUser.position,
+                isActive: newUser.isActive,
+            },
         });
     }
     catch (error) {
@@ -132,43 +183,50 @@ const createUser = async (req, res) => {
 exports.createUser = createUser;
 const updateUser = async (req, res) => {
     try {
-        const { fullName, role, department, site, position, password, isActive } = req.body;
-        const user = await User_1.User.findById(req.params.id);
-        if (!user) {
-            res.status(404).json({ success: false, message: 'User not found.' });
-            return;
+        const userId = req.params.id;
+        const { fullName, role, department, position, site, isActive, password } = req.body;
+        let passwordHash = undefined;
+        if (password && password.length >= 8) {
+            passwordHash = await bcryptjs_1.default.hash(password, 10);
         }
-        if (fullName)
-            user.fullName = fullName.trim();
-        if (role)
-            user.role = role;
-        if (department !== undefined)
-            user.department = department || null;
-        if (site)
-            user.site = site.trim();
-        if (position)
-            user.position = position.trim();
-        if (isActive !== undefined)
-            user.isActive = isActive;
-        if (password && password.length >= 6) {
-            user.passwordHash = await bcryptjs_1.default.hash(password, 10);
-        }
-        await user.save();
+        const updatedUser = await db_1.prisma.user.update({
+            where: { id: userId },
+            data: {
+                fullName: fullName ? fullName.trim() : undefined,
+                role: role || undefined,
+                departmentId: department !== undefined ? department || null : undefined,
+                position: position ? position.trim() : undefined,
+                site: site ? site.trim() : undefined,
+                isActive: isActive !== undefined ? isActive : undefined,
+                passwordHash,
+            },
+            include: { department: true },
+        });
         await (0, auditService_1.logAudit)({
-            userId: req.user?._id,
-            userEmail: req.user?.email || 'SYSTEM',
-            userRole: req.user?.role,
+            userId: req.user.id,
+            userEmail: req.user.email,
+            userRole: req.user.role,
             action: 'USER_UPDATED',
             module: 'USERS',
-            entityId: user._id.toString(),
-            metadata: { targetEmployeeId: user.employeeId },
+            entityId: updatedUser.id,
+            metadata: { updatedUserEmail: updatedUser.email, newRole: updatedUser.role, isActive: updatedUser.isActive },
             req,
         });
-        const updatedUser = await User_1.User.findById(user._id).populate('department');
         res.status(200).json({
             success: true,
             message: 'User updated successfully.',
-            user: updatedUser,
+            user: {
+                _id: updatedUser.id,
+                id: updatedUser.id,
+                employeeId: updatedUser.employeeId,
+                fullName: updatedUser.fullName,
+                email: updatedUser.email,
+                role: updatedUser.role,
+                department: updatedUser.department ? { ...updatedUser.department, _id: updatedUser.department.id } : null,
+                site: updatedUser.site,
+                position: updatedUser.position,
+                isActive: updatedUser.isActive,
+            },
         });
     }
     catch (error) {
@@ -182,28 +240,27 @@ const updateUser = async (req, res) => {
 exports.updateUser = updateUser;
 const unlockUser = async (req, res) => {
     try {
-        const user = await User_1.User.findById(req.params.id);
-        if (!user) {
-            res.status(404).json({ success: false, message: 'User not found.' });
-            return;
-        }
-        user.failedLoginAttempts = 0;
-        user.lockUntil = null;
-        await user.save();
+        const userId = req.params.id;
+        const user = await db_1.prisma.user.update({
+            where: { id: userId },
+            data: {
+                failedLoginAttempts: 0,
+                lockUntil: null,
+            },
+        });
         await (0, auditService_1.logAudit)({
-            userId: req.user?._id,
-            userEmail: req.user?.email || 'SYSTEM',
-            userRole: req.user?.role,
+            userId: req.user.id,
+            userEmail: req.user.email,
+            userRole: req.user.role,
             action: 'USER_UNLOCKED',
             module: 'USERS',
-            entityId: user._id.toString(),
-            metadata: { unlockedEmployeeId: user.employeeId },
+            entityId: user.id,
+            metadata: { unlockedUserEmail: user.email },
             req,
         });
         res.status(200).json({
             success: true,
-            message: `Account for ${user.fullName} (${user.employeeId}) has been unlocked.`,
-            user,
+            message: `Account for ${user.fullName} (${user.email}) has been successfully unlocked.`,
         });
     }
     catch (error) {

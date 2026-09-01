@@ -1,0 +1,295 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  STAFF
+  DEPARTMENT_HEAD
+  ADMIN
+  IT_SECURITY_ADMIN
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?  @db.Text
+  site        String   @default("Hemas Hospital Wattala")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  policies    Policy[]
+  incidents   Incident[]
+
+  @@map("departments")
+}
+
+model User {
+  id                  String    @id @default(uuid())
+  employeeId          String    @unique
+  fullName            String
+  email               String    @unique
+  passwordHash        String
+  role                UserRole  @default(STAFF)
+  departmentId        String?
+  department          Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  site                String    @default("Hemas Hospital Wattala")
+  position            String    @default("Clinical Staff")
+  isActive            Boolean   @default(true)
+  failedLoginAttempts Int       @default(0)
+  lockUntil           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  createdPolicies         Policy[]                @relation("PolicyCreatedBy")
+  updatedPolicies         Policy[]                @relation("PolicyUpdatedBy")
+  changedPolicyVersions   PolicyVersion[]         @relation("PolicyVersionChangedBy")
+  policyAcknowledgements  PolicyAcknowledgement[]
+  createdTrainingModules  TrainingModule[]        @relation("TrainingModuleCreatedBy")
+  quizAttempts            QuizAttempt[]
+  trainingProgress        TrainingProgress[]
+  reportedIncidents       Incident[]              @relation("IncidentReportedBy")
+  assignedIncidents       Incident[]              @relation("IncidentAssignedTo")
+  notifications           Notification[]
+  auditLogs               AuditLog[]
+
+  @@index([role])
+  @@index([departmentId])
+  @@map("users")
+}
+
+model Policy {
+  id            String    @id @default(uuid())
+  title         String
+  description   String    @db.Text
+  content       String    @db.LongText
+  category      String
+  departmentId  String?
+  department    Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  version       String    @default("1.0")
+  status        String    @default("Draft")
+  effectiveDate DateTime  @default(now())
+  publishedAt   DateTime?
+  changelog     String?   @db.Text
+  createdById   String
+  createdBy     User      @relation("PolicyCreatedBy", fields: [createdById], references: [id])
+  updatedById   String
+  updatedBy     User      @relation("PolicyUpdatedBy", fields: [updatedById], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  versions         PolicyVersion[]
+  acknowledgements PolicyAcknowledgement[]
+
+  @@index([status, category])
+  @@index([departmentId])
+  @@map("policies")
+}
+
+model PolicyVersion {
+  id          String    @id @default(uuid())
+  policyId    String
+  policy      Policy    @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  version     String
+  title       String
+  content     String    @db.LongText
+  changelog   String?   @db.Text
+  publishedAt DateTime?
+  archivedAt  DateTime?
+  changedById String?
+  changedBy   User?     @relation("PolicyVersionChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+
+  acknowledgements PolicyAcknowledgement[]
+
+  @@unique([policyId, version])
+  @@index([policyId])
+  @@map("policy_versions")
+}
+
+model PolicyAcknowledgement {
+  id              String         @id @default(uuid())
+  policyId        String
+  policy          Policy         @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  policyVersionId String?
+  policyVersionRel PolicyVersion? @relation(fields: [policyVersionId], references: [id], onDelete: SetNull)
+  policyVersion   String
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acknowledgedAt  DateTime       @default(now())
+  ipAddress       String?
+  userAgent       String?        @db.Text
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([policyId, policyVersion, userId])
+  @@index([userId])
+  @@index([policyId])
+  @@map("policy_acknowledgements")
+}
+
+model TrainingModule {
+  id                     String    @id @default(uuid())
+  title                  String
+  description            String    @db.Text
+  category               String
+  durationMinutes        Int       @default(15)
+  content                Json      // { introduction: string, sections: [...], examples: [...], keyTakeaways: [...] }
+  assignedRoles          Json      // ["STAFF", "DEPARTMENT_HEAD", "ADMIN", "IT_SECURITY_ADMIN"]
+  assignedDepartmentIds  Json?     // Array of department IDs
+  dueDate                DateTime?
+  passingScore           Int       @default(80)
+  version                String    @default("1.0")
+  status                 String    @default("Published")
+  pdfFileName            String?
+  pdfFilePath            String?
+  createdById            String
+  createdBy              User      @relation("TrainingModuleCreatedBy", fields: [createdById], references: [id])
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  quizzes          Quiz?
+  trainingProgress TrainingProgress[]
+
+  @@index([status, category])
+  @@map("training_modules")
+}
+
+model Quiz {
+  id               String         @id @default(uuid())
+  trainingModuleId String         @unique
+  trainingModule   TrainingModule @relation(fields: [trainingModuleId], references: [id], onDelete: Cascade)
+  passingScore     Int            @default(80)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  questions QuizQuestion[]
+  attempts  QuizAttempt[]
+
+  @@map("quizzes")
+}
+
+model QuizQuestion {
+  id            String   @id @default(uuid())
+  quizId        String
+  quiz          Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  questionId    String
+  question      String   @db.Text
+  options       Json     // Array of options: string[]
+  correctAnswer Int      // 0-based index
+  explanation   String   @db.Text
+  orderIndex    Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([quizId])
+  @@map("quiz_questions")
+}
+
+model QuizAttempt {
+  id            String   @id @default(uuid())
+  quizId        String
+  quiz          Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attemptNumber Int      @default(1)
+  score         Int
+  passed        Boolean
+  answers       Json     // Array of { questionId, selectedOption, isCorrect }
+  submittedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  @@index([quizId])
+  @@index([userId])
+  @@map("quiz_attempts")
+}
+
+model TrainingProgress {
+  id               String         @id @default(uuid())
+  userId           String
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trainingModuleId String
+  trainingModule   TrainingModule @relation(fields: [trainingModuleId], references: [id], onDelete: Cascade)
+  status           String         @default("Not Started")
+  score            Int            @default(0)
+  attempts         Int            @default(0)
+  startedAt        DateTime?
+  completedAt      DateTime?
+  dueDate          DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([userId, trainingModuleId])
+  @@index([status])
+  @@index([userId])
+  @@index([trainingModuleId])
+  @@map("training_progress")
+}
+
+model Incident {
+  id              String      @id @default(uuid())
+  incidentNumber  String      @unique
+  reportedById    String
+  reportedBy      User        @relation("IncidentReportedBy", fields: [reportedById], references: [id])
+  incidentType    String
+  title           String
+  description     String      @db.Text
+  priority        String      @default("Medium")
+  status          String      @default("Open")
+  departmentId    String?
+  department      Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  assignedToId    String?
+  assignedTo      User?       @relation("IncidentAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  resolutionNotes String?     @db.Text
+  notes           Json        // Array of { authorId, authorName, authorRole, note, createdAt }
+  resolvedAt      DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([status, priority])
+  @@index([reportedById])
+  @@index([departmentId])
+  @@map("incidents")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String   @db.Text
+  type      String   @default("system")
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userEmail String
+  userRole  String   @default("SYSTEM")
+  action    String
+  module    String
+  entityId  String?
+  timestamp DateTime @default(now())
+  ipAddress String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([action])
+  @@index([module])
+  @@index([userEmail])
+  @@map("audit_logs")
+}

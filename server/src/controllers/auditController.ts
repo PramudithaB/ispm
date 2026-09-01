@@ -1,31 +1,31 @@
 import { Response } from 'express';
-import { AuditLog } from '../models/AuditLog';
+import { prisma } from '../config/db';
 import { AuthRequest } from '../middleware/auth';
 
 export const getAuditLogs = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { action, module, userEmail, startDate, endDate, search, limit = '100', page = '1' } = req.query;
 
-    const filter: any = {};
+    const where: any = {};
 
-    if (action) filter.action = action;
-    if (module) filter.module = module;
-    if (userEmail) filter.userEmail = new RegExp(userEmail as string, 'i');
+    if (action) where.action = action as string;
+    if (module) where.module = module as string;
+    if (userEmail) where.userEmail = { contains: userEmail as string };
 
     if (startDate || endDate) {
-      filter.timestamp = {};
-      if (startDate) filter.timestamp.$gte = new Date(startDate as string);
-      if (endDate) filter.timestamp.$lte = new Date(endDate as string);
+      where.timestamp = {};
+      if (startDate) where.timestamp.gte = new Date(startDate as string);
+      if (endDate) where.timestamp.lte = new Date(endDate as string);
     }
 
     if (search) {
-      const searchRegex = new RegExp(search as string, 'i');
-      filter.$or = [
-        { action: searchRegex },
-        { module: searchRegex },
-        { userEmail: searchRegex },
-        { ipAddress: searchRegex },
-        { entityId: searchRegex },
+      const q = String(search);
+      where.OR = [
+        { action: { contains: q } },
+        { module: { contains: q } },
+        { userEmail: { contains: q } },
+        { ipAddress: { contains: q } },
+        { entityId: { contains: q } },
       ];
     }
 
@@ -34,12 +34,18 @@ export const getAuditLogs = async (req: AuthRequest, res: Response): Promise<voi
     const skip = (pageNum - 1) * limitNum;
 
     const [logs, total] = await Promise.all([
-      AuditLog.find(filter)
-        .populate('userId', 'fullName employeeId position')
-        .sort({ timestamp: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      AuditLog.countDocuments(filter),
+      prisma.auditLog.findMany({
+        where,
+        include: {
+          user: {
+            select: { id: true, fullName: true, employeeId: true, position: true },
+          },
+        },
+        orderBy: { timestamp: 'desc' },
+        skip,
+        take: limitNum,
+      }),
+      prisma.auditLog.count({ where }),
     ]);
 
     res.status(200).json({
@@ -48,12 +54,16 @@ export const getAuditLogs = async (req: AuthRequest, res: Response): Promise<voi
       page: pageNum,
       totalPages: Math.ceil(total / limitNum),
       count: logs.length,
-      logs,
+      logs: logs.map((l) => ({
+        ...l,
+        _id: l.id,
+        user: l.user ? { ...l.user, _id: l.user.id } : null,
+      })),
     });
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch audit trail records.',
+      message: 'Failed to fetch audit trail records from MySQL.',
       error: error.message,
     });
   }

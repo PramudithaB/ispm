@@ -1,4 +1,5 @@
 import express, { Application, Request, Response } from 'express';
+import path from 'path';
 import helmet from 'helmet';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -9,8 +10,12 @@ import { apiRateLimiter } from './middleware/rateLimiter';
 
 const app: Application = express();
 
-// Security Headers
-app.use(helmet());
+// Security Headers (allow cross-origin resources for PDF preview/download)
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
 
 // CORS Configuration
 app.use(
@@ -43,10 +48,8 @@ if (config.nodeEnv !== 'test') {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// General Rate Limiter (skip in test environment)
-if (config.nodeEnv !== 'test') {
-  app.use('/api', apiRateLimiter);
-}
+// Static file serving for uploaded training documents
+app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
 
 // API Routes
 app.use('/api', routes);

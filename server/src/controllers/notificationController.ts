@@ -1,31 +1,36 @@
 import { Response } from 'express';
-import { Notification } from '../models/Notification';
+import { prisma } from '../config/db';
 import { AuthRequest } from '../middleware/auth';
 
 export const getNotifications = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const userId = req.user!._id;
+    const userId = req.user!.id;
     const { unreadOnly } = req.query;
 
-    const filter: any = { userId };
+    const where: any = { userId };
     if (unreadOnly === 'true') {
-      filter.isRead = false;
+      where.isRead = false;
     }
 
-    const notifications = await Notification.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    const unreadCount = await Notification.countDocuments({
-      userId,
-      isRead: false,
-    });
+    const [notifications, unreadCount] = await Promise.all([
+      prisma.notification.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      }),
+      prisma.notification.count({
+        where: { userId, isRead: false },
+      }),
+    ]);
 
     res.status(200).json({
       success: true,
-      unreadCount,
       count: notifications.length,
-      notifications,
+      unreadCount,
+      notifications: notifications.map((n) => ({
+        ...n,
+        _id: n.id,
+      })),
     });
   } catch (error: any) {
     res.status(500).json({
@@ -38,25 +43,22 @@ export const getNotifications = async (req: AuthRequest, res: Response): Promise
 
 export const markAsRead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const notification = await Notification.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user!._id },
-      { isRead: true },
-      { new: true }
-    );
+    const notificationId = req.params.id;
+    const userId = req.user!.id;
 
-    if (!notification) {
-      res.status(404).json({ success: false, message: 'Notification not found.' });
-      return;
-    }
+    await prisma.notification.updateMany({
+      where: { id: notificationId, userId },
+      data: { isRead: true },
+    });
 
     res.status(200).json({
       success: true,
-      notification,
+      message: 'Notification marked as read.',
     });
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to mark notification as read.',
+      message: 'Failed to update notification.',
       error: error.message,
     });
   }
@@ -64,10 +66,12 @@ export const markAsRead = async (req: AuthRequest, res: Response): Promise<void>
 
 export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    await Notification.updateMany(
-      { userId: req.user!._id, isRead: false },
-      { isRead: true }
-    );
+    const userId = req.user!.id;
+
+    await prisma.notification.updateMany({
+      where: { userId, isRead: false },
+      data: { isRead: true },
+    });
 
     res.status(200).json({
       success: true,
@@ -76,7 +80,7 @@ export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<vo
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to update notifications.',
+      message: 'Failed to mark notifications as read.',
       error: error.message,
     });
   }

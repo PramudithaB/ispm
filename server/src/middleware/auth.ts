@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/env';
-import { User, IUser, UserRole } from '../models/User';
-import { Types } from 'mongoose';
+import { prisma } from '../config/db';
+import { UserRole, User, Department } from '@prisma/client';
 
 export interface JwtPayload {
   userId: string;
@@ -11,8 +11,13 @@ export interface JwtPayload {
   departmentId?: string | null;
 }
 
+export type SafeUser = User & {
+  _id: string;
+  department?: Department | null;
+};
+
 export interface AuthRequest extends Request {
-  user?: IUser & { _id: Types.ObjectId };
+  user?: SafeUser;
 }
 
 export const authenticate = async (
@@ -58,7 +63,11 @@ export const authenticate = async (
       return;
     }
 
-    const user = await User.findById(decoded.userId).populate('department');
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      include: { department: true },
+    });
+
     if (!user) {
       res.status(401).json({
         success: false,
@@ -75,7 +84,8 @@ export const authenticate = async (
       return;
     }
 
-    if (user.isLocked()) {
+    // Check account lockout
+    if (user.lockUntil && new Date(user.lockUntil).getTime() > Date.now()) {
       res.status(403).json({
         success: false,
         message: 'Account is temporarily locked due to failed login attempts.',
@@ -83,7 +93,12 @@ export const authenticate = async (
       return;
     }
 
-    req.user = user as unknown as IUser & { _id: Types.ObjectId };
+    // Attach user with compatibility _id
+    req.user = {
+      ...user,
+      _id: user.id,
+    };
+
     next();
   } catch (error: any) {
     res.status(500).json({

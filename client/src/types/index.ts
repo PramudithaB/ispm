@@ -118,6 +118,8 @@ export interface ITrainingModule {
   passingScore: number;
   version: string;
   status: 'Draft' | 'Published' | 'Archived';
+  pdfFileName?: string | null;
+  pdfFilePath?: string | null;
   createdBy?: IUser;
   userStatus?: 'Not Started' | 'In Progress' | 'Completed' | 'Overdue';
   userScore?: number;

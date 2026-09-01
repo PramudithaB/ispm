@@ -23,7 +23,7 @@ router.use('/notifications', notificationRoutes);
 router.use('/audit-logs', auditRoutes);
 router.use('/reports', reportRoutes);
 
-// Health check endpoint
+// Health check endpoints
 router.get('/health', (req, res) => {
   res.status(200).json({
     status: 'online',
@@ -31,6 +31,24 @@ router.get('/health', (req, res) => {
     timestamp: new Date(),
     version: '1.0.0',
   });
+});
+
+router.get('/health/db', async (req, res) => {
+  try {
+    const { prisma } = await import('../config/db');
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({
+      success: true,
+      database: 'securehemas',
+      message: 'MySQL connection successful',
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      database: 'securehemas',
+      message: `MySQL connection failed: ${error.message}`,
+    });
+  }
 });
 
 export default router;

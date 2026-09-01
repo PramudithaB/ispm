@@ -1,32 +1,41 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { User, IUser } from '../models/User';
+import bcrypt from 'bcryptjs';
+import { prisma } from '../config/db';
 import { config } from '../config/env';
 import { logAudit } from '../services/auditService';
 import { AuthRequest } from '../middleware/auth';
-import bcrypt from 'bcryptjs';
+import { UserRole } from '@prisma/client';
 
-const generateToken = (user: IUser): string => {
+const generateToken = (user: { id: string; email: string; role: UserRole; departmentId: string | null }): string => {
   return jwt.sign(
     {
-      userId: user._id,
+      userId: user.id,
       email: user.email,
       role: user.role,
-      departmentId: user.department ? user.department.toString() : null,
+      departmentId: user.departmentId,
     },
     config.jwtSecret,
-    { expiresIn: '7d' }
+    { expiresIn: config.jwtExpiresIn as any }
   );
 };
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { employeeId, fullName, email, password, department, position, site } = req.body;
+    const { employeeId, fullName, email, password, confirmPassword, role, department, position, site } = req.body;
 
     if (!employeeId || !fullName || !email || !password) {
       res.status(400).json({
         success: false,
         message: 'Employee ID, Full Name, Email, and Password are required.',
+      });
+      return;
+    }
+
+    if (confirmPassword && password !== confirmPassword) {
+      res.status(400).json({
+        success: false,
+        message: 'Passwords do not match.',
       });
       return;
     }
@@ -39,10 +48,15 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const validRoles = ['STAFF', 'DEPARTMENT_HEAD', 'ADMIN', 'IT_SECURITY_ADMIN'];
+    const assignedRole: UserRole = role && validRoles.includes(role) ? (role as UserRole) : 'STAFF';
+
     const normalizedEmail = email.toLowerCase().trim();
     const normalizedEmpId = employeeId.toUpperCase().trim();
 
-    const existingEmail = await User.findOne({ email: normalizedEmail });
+    const existingEmail = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
     if (existingEmail) {
       res.status(409).json({
         success: false,
@@ -51,7 +65,9 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const existingEmpId = await User.findOne({ employeeId: normalizedEmpId });
+    const existingEmpId = await prisma.user.findUnique({
+      where: { employeeId: normalizedEmpId },
+    });
     if (existingEmpId) {
       res.status(409).json({
         success: false,
@@ -62,30 +78,32 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const newUser = await User.create({
-      employeeId: normalizedEmpId,
-      fullName: fullName.trim(),
-      email: normalizedEmail,
-      passwordHash,
-      role: 'STAFF', // Safe default
-      department: department || null,
-      site: site?.trim() || 'Hemas Hospital Wattala',
-      position: position?.trim() || 'Hospital Staff',
-      isActive: true,
+    const newUser = await prisma.user.create({
+      data: {
+        employeeId: normalizedEmpId,
+        fullName: fullName.trim(),
+        email: normalizedEmail,
+        passwordHash,
+        role: assignedRole,
+        departmentId: department || null,
+        site: site?.trim() || 'Hemas Hospital Wattala',
+        position: position?.trim() || 'Clinical Staff',
+        isActive: true,
+      },
+      include: { department: true },
     });
 
     await logAudit({
-      userId: newUser._id,
+      userId: newUser.id,
       userEmail: newUser.email,
       userRole: 'STAFF',
       action: 'USER_CREATED',
       module: 'AUTH',
-      entityId: newUser._id.toString(),
+      entityId: newUser.id,
       metadata: { registrationType: 'Self-Registration', employeeId: newUser.employeeId },
       req,
     });
 
-    const populatedUser = await User.findById(newUser._id).populate('department');
     const token = generateToken(newUser);
 
     res.status(201).json({
@@ -93,14 +111,15 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       message: 'Staff account registered successfully.',
       token,
       user: {
-        _id: populatedUser!._id,
-        employeeId: populatedUser!.employeeId,
-        fullName: populatedUser!.fullName,
-        email: populatedUser!.email,
-        role: populatedUser!.role,
-        department: populatedUser!.department,
-        site: populatedUser!.site,
-        position: populatedUser!.position,
+        _id: newUser.id,
+        id: newUser.id,
+        employeeId: newUser.employeeId,
+        fullName: newUser.fullName,
+        email: newUser.email,
+        role: newUser.role,
+        department: newUser.department ? { ...newUser.department, _id: newUser.department.id } : null,
+        site: newUser.site,
+        position: newUser.position,
       },
     });
   } catch (error: any) {
@@ -119,15 +138,16 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     if (!email || !password) {
       res.status(400).json({
         success: false,
-        message: 'Please provide both email and password.',
+        message: 'Email and password are required.',
       });
       return;
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    const user = await User.findOne({ email: normalizedEmail })
-      .select('+passwordHash')
-      .populate('department');
+    const user = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      include: { department: true },
+    });
 
     if (!user) {
       await logAudit({
@@ -137,139 +157,123 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         metadata: { reason: 'User not found' },
         req,
       });
-
       res.status(401).json({
         success: false,
-        message: 'Invalid email address or password.',
+        message: 'Invalid email or password credentials.',
       });
       return;
     }
 
     // Check if account is locked
-    if (user.isLocked()) {
-      const lockMinutesRemaining = Math.ceil(
-        ((user.lockUntil?.getTime() || 0) - Date.now()) / 60000
+    if (user.lockUntil && new Date(user.lockUntil).getTime() > Date.now()) {
+      const minutesRemaining = Math.ceil(
+        (new Date(user.lockUntil).getTime() - Date.now()) / (60 * 1000)
       );
-
-      await logAudit({
-        userId: user._id,
-        userEmail: user.email,
-        userRole: user.role,
-        action: 'LOGIN_FAILED',
-        module: 'AUTH',
-        metadata: { reason: 'Account locked', lockMinutesRemaining },
-        req,
-      });
-
-      res.status(423).json({
+      res.status(403).json({
         success: false,
-        message: `Account is temporarily locked due to excessive failed attempts. Try again in ${lockMinutesRemaining} minute(s).`,
+        message: `Account is temporarily locked due to repeated failed logins. Please try again in ${minutesRemaining} minutes or contact IT Security.`,
         isLocked: true,
       });
       return;
     }
 
-    // Check if user is active
     if (!user.isActive) {
-      await logAudit({
-        userId: user._id,
-        userEmail: user.email,
-        userRole: user.role,
-        action: 'LOGIN_FAILED',
-        module: 'AUTH',
-        metadata: { reason: 'Account deactivated' },
-        req,
-      });
-
       res.status(403).json({
         success: false,
-        message: 'This account has been deactivated. Please contact your Hospital Administrator.',
+        message: 'Your account has been deactivated. Please contact your Hospital Administrator.',
       });
       return;
     }
 
-    // Verify password
-    const isMatch = await user.comparePassword(password);
-    if (!isMatch) {
-      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
 
-      // Lock account after 5 failed attempts for 15 minutes
-      if (user.failedLoginAttempts >= 5) {
-        user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
-        await logAudit({
-          userId: user._id,
-          userEmail: user.email,
-          userRole: user.role,
-          action: 'USER_LOCKED',
-          module: 'AUTH',
-          metadata: { attempts: user.failedLoginAttempts },
-          req,
-        });
+    if (!isMatch) {
+      const newAttempts = user.failedLoginAttempts + 1;
+      let lockUntil: Date | null = null;
+
+      if (newAttempts >= 5) {
+        lockUntil = new Date(Date.now() + 15 * 60 * 1000); // 15-minute lock
       }
 
-      await user.save();
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedLoginAttempts: newAttempts,
+          lockUntil,
+        },
+      });
 
       await logAudit({
-        userId: user._id,
+        userId: user.id,
         userEmail: user.email,
         userRole: user.role,
         action: 'LOGIN_FAILED',
         module: 'AUTH',
-        metadata: { attempts: user.failedLoginAttempts, locked: user.isLocked() },
+        metadata: { failedAttempts: newAttempts, isLocked: !!lockUntil },
         req,
       });
 
-      const attemptsRemaining = Math.max(0, 5 - user.failedLoginAttempts);
+      if (lockUntil) {
+        res.status(403).json({
+          success: false,
+          message: 'Account locked for 15 minutes due to 5 consecutive failed login attempts.',
+          isLocked: true,
+        });
+        return;
+      }
+
       res.status(401).json({
         success: false,
-        message:
-          user.failedLoginAttempts >= 5
-            ? 'Account locked for 15 minutes due to 5 failed login attempts.'
-            : `Invalid credentials. ${attemptsRemaining} attempt(s) remaining before account lockout.`,
-        attemptsRemaining,
+        message: `Invalid email or password credentials. ${5 - newAttempts} attempt(s) remaining before lockout.`,
+        attemptsRemaining: 5 - newAttempts,
       });
       return;
     }
 
-    // Login successful: reset failed login attempts & lock
-    user.failedLoginAttempts = 0;
-    user.lockUntil = null;
-    await user.save();
-
-    const token = generateToken(user);
+    // Reset failed attempts upon successful authentication
+    if (user.failedLoginAttempts > 0 || user.lockUntil) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedLoginAttempts: 0,
+          lockUntil: null,
+        },
+      });
+    }
 
     await logAudit({
-      userId: user._id,
+      userId: user.id,
       userEmail: user.email,
       userRole: user.role,
       action: 'LOGIN',
       module: 'AUTH',
-      metadata: { site: user.site, position: user.position },
+      metadata: { site: user.site },
       req,
     });
 
-    const userResponse = {
-      _id: user._id,
-      employeeId: user.employeeId,
-      fullName: user.fullName,
-      email: user.email,
-      role: user.role,
-      department: user.department,
-      site: user.site,
-      position: user.position,
-      isActive: user.isActive,
-    };
+    const token = generateToken(user);
 
     res.status(200).json({
       success: true,
       message: 'Login successful.',
       token,
-      user: userResponse,
+      user: {
+        _id: user.id,
+        id: user.id,
+        employeeId: user.employeeId,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        department: user.department ? { ...user.department, _id: user.department.id } : null,
+        site: user.site,
+        position: user.position,
+        isActive: user.isActive,
+      },
     });
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Login processing error.',
+      message: 'Login failed.',
       error: error.message,
     });
   }
@@ -279,7 +283,7 @@ export const logout = async (req: AuthRequest, res: Response): Promise<void> => 
   try {
     if (req.user) {
       await logAudit({
-        userId: req.user._id,
+        userId: req.user.id,
         userEmail: req.user.email,
         userRole: req.user.role,
         action: 'LOGOUT',
@@ -295,7 +299,7 @@ export const logout = async (req: AuthRequest, res: Response): Promise<void> => 
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Logout processing error.',
+      message: 'Logout error.',
       error: error.message,
     });
   }
@@ -303,19 +307,35 @@ export const logout = async (req: AuthRequest, res: Response): Promise<void> => 
 
 export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
-      res.status(401).json({ success: false, message: 'Unauthorized' });
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      include: { department: true },
+    });
+
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User not found.' });
       return;
     }
 
     res.status(200).json({
       success: true,
-      user: req.user,
+      user: {
+        _id: user.id,
+        id: user.id,
+        employeeId: user.employeeId,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        department: user.department ? { ...user.department, _id: user.department.id } : null,
+        site: user.site,
+        position: user.position,
+        isActive: user.isActive,
+      },
     });
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch current user profile.',
+      message: 'Failed to retrieve user profile.',
       error: error.message,
     });
   }
@@ -323,61 +343,27 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
 
 export const updateProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
-      res.status(401).json({ success: false, message: 'Unauthorized' });
-      return;
-    }
+    const { fullName, position, site } = req.body;
+    const userId = req.user!.id;
 
-    const { fullName, currentPassword, newPassword } = req.body;
-    const user = await User.findById(req.user._id).select('+passwordHash');
-
-    if (!user) {
-      res.status(404).json({ success: false, message: 'User not found' });
-      return;
-    }
-
-    if (fullName) {
-      user.fullName = fullName.trim();
-    }
-
-    if (newPassword) {
-      if (!currentPassword) {
-        res.status(400).json({
-          success: false,
-          message: 'Current password is required to set a new password.',
-        });
-        return;
-      }
-
-      const isMatch = await user.comparePassword(currentPassword);
-      if (!isMatch) {
-        res.status(400).json({
-          success: false,
-          message: 'Current password is incorrect.',
-        });
-        return;
-      }
-
-      if (newPassword.length < 8) {
-        res.status(400).json({
-          success: false,
-          message: 'New password must be at least 8 characters long.',
-        });
-        return;
-      }
-
-      user.passwordHash = await bcrypt.hash(newPassword, 10);
-    }
-
-    await user.save();
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        fullName: fullName?.trim() || undefined,
+        position: position?.trim() || undefined,
+        site: site?.trim() || undefined,
+      },
+      include: { department: true },
+    });
 
     await logAudit({
-      userId: user._id,
-      userEmail: user.email,
-      userRole: user.role,
+      userId,
+      userEmail: updatedUser.email,
+      userRole: updatedUser.role,
       action: 'USER_UPDATED',
       module: 'USERS',
-      metadata: { updatedFields: { fullName: !!fullName, password: !!newPassword } },
+      entityId: userId,
+      metadata: { profileUpdate: true },
       req,
     });
 
@@ -385,14 +371,15 @@ export const updateProfile = async (req: AuthRequest, res: Response): Promise<vo
       success: true,
       message: 'Profile updated successfully.',
       user: {
-        _id: user._id,
-        employeeId: user.employeeId,
-        fullName: user.fullName,
-        email: user.email,
-        role: user.role,
-        department: user.department,
-        site: user.site,
-        position: user.position,
+        _id: updatedUser.id,
+        id: updatedUser.id,
+        employeeId: updatedUser.employeeId,
+        fullName: updatedUser.fullName,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        department: updatedUser.department ? { ...updatedUser.department, _id: updatedUser.department.id } : null,
+        site: updatedUser.site,
+        position: updatedUser.position,
       },
     });
   } catch (error: any) {

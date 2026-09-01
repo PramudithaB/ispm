@@ -1,38 +1,41 @@
 import { Response } from 'express';
-import { User } from '../models/User';
-import { Policy } from '../models/Policy';
-import { PolicyAcknowledgement } from '../models/PolicyAcknowledgement';
-import { TrainingModule } from '../models/TrainingModule';
-import { TrainingProgress } from '../models/TrainingProgress';
-import { Department } from '../models/Department';
-import { Incident } from '../models/Incident';
+import { prisma } from '../config/db';
 import { AuthRequest } from '../middleware/auth';
 
 export const getComplianceSummary = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const now = new Date();
+
     const [
       totalStaff,
-      publishedPolicies,
-      publishedTrainings,
+      publishedPoliciesCount,
+      publishedTrainingsCount,
       totalAcks,
       completedProgresses,
       openIncidents,
+      overdueTrainings,
     ] = await Promise.all([
-      User.countDocuments({ isActive: true }),
-      Policy.find({ status: 'Published' }),
-      TrainingModule.find({ status: 'Published' }),
-      PolicyAcknowledgement.countDocuments(),
-      TrainingProgress.countDocuments({ status: 'Completed' }),
-      Incident.countDocuments({ status: { $in: ['Open', 'In Review'] } }),
+      prisma.user.count({ where: { isActive: true } }),
+      prisma.policy.count({ where: { status: 'Published' } }),
+      prisma.trainingModule.count({ where: { status: 'Published' } }),
+      prisma.policyAcknowledgement.count(),
+      prisma.trainingProgress.count({ where: { status: 'Completed' } }),
+      prisma.incident.count({ where: { status: { in: ['Open', 'In Review'] } } }),
+      prisma.trainingProgress.count({
+        where: {
+          status: { not: 'Completed' },
+          dueDate: { lt: now },
+        },
+      }),
     ]);
 
-    const totalPolicyExpectations = totalStaff * publishedPolicies.length;
+    const totalPolicyExpectations = totalStaff * publishedPoliciesCount;
     const policyAckRate =
       totalPolicyExpectations > 0
         ? Math.min(100, Math.round((totalAcks / totalPolicyExpectations) * 100))
         : 100;
 
-    const totalTrainingExpectations = totalStaff * publishedTrainings.length;
+    const totalTrainingExpectations = totalStaff * publishedTrainingsCount;
     const trainingCompletionRate =
       totalTrainingExpectations > 0
         ? Math.min(100, Math.round((completedProgresses / totalTrainingExpectations) * 100))
@@ -40,19 +43,12 @@ export const getComplianceSummary = async (req: AuthRequest, res: Response): Pro
 
     const overallComplianceScore = Math.round(policyAckRate * 0.5 + trainingCompletionRate * 0.5);
 
-    // Overdue count
-    const now = new Date();
-    const overdueTrainings = await TrainingProgress.countDocuments({
-      status: { $ne: 'Completed' },
-      dueDate: { $lt: now },
-    });
-
     res.status(200).json({
       success: true,
       summary: {
         totalStaff,
-        publishedPoliciesCount: publishedPolicies.length,
-        publishedTrainingsCount: publishedTrainings.length,
+        publishedPoliciesCount,
+        publishedTrainingsCount,
         policyAckRate,
         trainingCompletionRate,
         overallComplianceScore,
@@ -65,7 +61,7 @@ export const getComplianceSummary = async (req: AuthRequest, res: Response): Pro
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to generate compliance summary.',
+      message: 'Failed to generate compliance summary from MySQL.',
       error: error.message,
     });
   }
@@ -73,19 +69,31 @@ export const getComplianceSummary = async (req: AuthRequest, res: Response): Pro
 
 export const getDepartmentCompliance = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const departments = await Department.find().sort({ name: 1 });
-    const publishedPolicies = await Policy.find({ status: 'Published' });
-    const publishedTrainings = await TrainingModule.find({ status: 'Published' });
+    const departments = await prisma.department.findMany({
+      orderBy: { name: 'asc' },
+    });
+
+    const [publishedPoliciesCount, publishedTrainingsCount] = await Promise.all([
+      prisma.policy.count({ where: { status: 'Published' } }),
+      prisma.trainingModule.count({ where: { status: 'Published' } }),
+    ]);
+
+    const now = new Date();
 
     const departmentStats = await Promise.all(
       departments.map(async (dept) => {
-        const staff = await User.find({ department: dept._id, isActive: true });
+        const staff = await prisma.user.findMany({
+          where: { departmentId: dept.id, isActive: true },
+          select: { id: true },
+        });
+
         const staffCount = staff.length;
-        const staffIds = staff.map((s) => s._id);
+        const staffIds = staff.map((s) => s.id);
 
         if (staffCount === 0) {
           return {
-            _id: dept._id,
+            _id: dept.id,
+            id: dept.id,
             name: dept.name,
             site: dept.site,
             staffCount: 0,
@@ -97,25 +105,31 @@ export const getDepartmentCompliance = async (req: AuthRequest, res: Response): 
         }
 
         const [acksCount, completionsCount, overdueCount] = await Promise.all([
-          PolicyAcknowledgement.countDocuments({ userId: { $in: staffIds } }),
-          TrainingProgress.countDocuments({
-            userId: { $in: staffIds },
-            status: 'Completed',
+          prisma.policyAcknowledgement.count({
+            where: { userId: { in: staffIds } },
           }),
-          TrainingProgress.countDocuments({
-            userId: { $in: staffIds },
-            status: { $ne: 'Completed' },
-            dueDate: { $lt: new Date() },
+          prisma.trainingProgress.count({
+            where: {
+              userId: { in: staffIds },
+              status: 'Completed',
+            },
+          }),
+          prisma.trainingProgress.count({
+            where: {
+              userId: { in: staffIds },
+              status: { not: 'Completed' },
+              dueDate: { lt: now },
+            },
           }),
         ]);
 
-        const expectedAcks = staffCount * publishedPolicies.length;
+        const expectedAcks = staffCount * publishedPoliciesCount;
         const policyAckRate =
           expectedAcks > 0
             ? Math.min(100, Math.round((acksCount / expectedAcks) * 100))
             : 100;
 
-        const expectedTrainings = staffCount * publishedTrainings.length;
+        const expectedTrainings = staffCount * publishedTrainingsCount;
         const trainingCompletionRate =
           expectedTrainings > 0
             ? Math.min(100, Math.round((completionsCount / expectedTrainings) * 100))
@@ -126,7 +140,8 @@ export const getDepartmentCompliance = async (req: AuthRequest, res: Response): 
         );
 
         return {
-          _id: dept._id,
+          _id: dept.id,
+          id: dept.id,
           name: dept.name,
           site: dept.site,
           staffCount,
@@ -145,7 +160,7 @@ export const getDepartmentCompliance = async (req: AuthRequest, res: Response): 
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch department compliance statistics.',
+      message: 'Failed to calculate department compliance statistics.',
       error: error.message,
     });
   }
@@ -154,56 +169,66 @@ export const getDepartmentCompliance = async (req: AuthRequest, res: Response): 
 export const getDepartmentStaffCompliance = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const deptId = req.params.deptId;
-    const department = await Department.findById(deptId);
-    if (!department) {
-      res.status(404).json({ success: false, message: 'Department not found.' });
-      return;
-    }
+    const now = new Date();
 
-    const [staff, publishedPolicies, publishedTrainings] = await Promise.all([
-      User.find({ department: deptId, isActive: true }),
-      Policy.find({ status: 'Published' }),
-      TrainingModule.find({ status: 'Published' }),
+    const [publishedPoliciesCount, publishedTrainingsCount, staffMembers] = await Promise.all([
+      prisma.policy.count({ where: { status: 'Published' } }),
+      prisma.trainingModule.count({ where: { status: 'Published' } }),
+      prisma.user.findMany({
+        where: { departmentId: deptId, isActive: true },
+        select: {
+          id: true,
+          employeeId: true,
+          fullName: true,
+          email: true,
+          position: true,
+        },
+        orderBy: { fullName: 'asc' },
+      }),
     ]);
 
-    const staffComplianceList = await Promise.all(
-      staff.map(async (member) => {
-        const [acks, progresses] = await Promise.all([
-          PolicyAcknowledgement.find({ userId: member._id }),
-          TrainingProgress.find({ userId: member._id }),
+    const staffStats = await Promise.all(
+      staffMembers.map(async (staff) => {
+        const [acksCount, completionsCount, overdueCount] = await Promise.all([
+          prisma.policyAcknowledgement.count({ where: { userId: staff.id } }),
+          prisma.trainingProgress.count({
+            where: { userId: staff.id, status: 'Completed' },
+          }),
+          prisma.trainingProgress.count({
+            where: {
+              userId: staff.id,
+              status: { not: 'Completed' },
+              dueDate: { lt: now },
+            },
+          }),
         ]);
 
-        const acksCount = acks.length;
-        const totalPolicies = publishedPolicies.length;
         const policyRate =
-          totalPolicies > 0 ? Math.min(100, Math.round((acksCount / totalPolicies) * 100)) : 100;
+          publishedPoliciesCount > 0
+            ? Math.min(100, Math.round((acksCount / publishedPoliciesCount) * 100))
+            : 100;
 
-        const completedTrainingsCount = progresses.filter((p) => p.status === 'Completed').length;
-        const totalTrainings = publishedTrainings.length;
         const trainingRate =
-          totalTrainings > 0
-            ? Math.min(100, Math.round((completedTrainingsCount / totalTrainings) * 100))
+          publishedTrainingsCount > 0
+            ? Math.min(100, Math.round((completionsCount / publishedTrainingsCount) * 100))
             : 100;
 
         const overallScore = Math.round(policyRate * 0.5 + trainingRate * 0.5);
 
-        const overdueCount = progresses.filter(
-          (p) => p.status !== 'Completed' && p.dueDate && new Date(p.dueDate).getTime() < Date.now()
-        ).length;
-
         return {
-          _id: member._id,
-          employeeId: member.employeeId,
-          fullName: member.fullName,
-          email: member.email,
-          position: member.position,
+          _id: staff.id,
+          id: staff.id,
+          employeeId: staff.employeeId,
+          fullName: staff.fullName,
+          email: staff.email,
+          position: staff.position,
           policyRate,
           trainingRate,
           overallScore,
           acknowledgedPoliciesCount: acksCount,
-          totalPoliciesCount: totalPolicies,
-          completedTrainingsCount,
-          totalTrainingsCount: totalTrainings,
+          totalPoliciesCount: publishedPoliciesCount,
+          completedTrainingsCount: completionsCount,
+          totalTrainingsCount: publishedTrainingsCount,
           overdueCount,
         };
       })
@@ -211,17 +236,12 @@ export const getDepartmentStaffCompliance = async (req: AuthRequest, res: Respon
 
     res.status(200).json({
       success: true,
-      department: {
-        _id: department._id,
-        name: department.name,
-        site: department.site,
-      },
-      staff: staffComplianceList,
+      staff: staffStats,
     });
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch department staff compliance breakdown.',
+      message: 'Failed to calculate department staff compliance.',
       error: error.message,
     });
   }
@@ -229,89 +249,60 @@ export const getDepartmentStaffCompliance = async (req: AuthRequest, res: Respon
 
 export const getMyCompliance = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const userId = req.user!._id;
+    const userId = req.user!.id;
+    const now = new Date();
 
-    const [publishedPolicies, publishedTrainings, userAcks, userProgresses] = await Promise.all([
-      Policy.find({ status: 'Published' }),
-      TrainingModule.find({ status: 'Published' }),
-      PolicyAcknowledgement.find({ userId }),
-      TrainingProgress.find({ userId }).populate('trainingModuleId', 'title category dueDate'),
+    const [
+      publishedPoliciesCount,
+      publishedTrainingsCount,
+      userAcksCount,
+      completedTrainingsCount,
+      overdueCount,
+    ] = await Promise.all([
+      prisma.policy.count({ where: { status: 'Published' } }),
+      prisma.trainingModule.count({ where: { status: 'Published' } }),
+      prisma.policyAcknowledgement.count({ where: { userId } }),
+      prisma.trainingProgress.count({
+        where: { userId, status: 'Completed' },
+      }),
+      prisma.trainingProgress.count({
+        where: {
+          userId,
+          status: { not: 'Completed' },
+          dueDate: { lt: now },
+        },
+      }),
     ]);
 
-    const ackPolicyIds = new Set(userAcks.map((a) => a.policyId.toString()));
-    const completedProgressMap = new Map(
-      userProgresses.map((p) => [p.trainingModuleId?._id?.toString() || p.trainingModuleId.toString(), p])
-    );
-
-    const totalPolicies = publishedPolicies.length;
-    const acknowledgedCount = publishedPolicies.filter((p) =>
-      ackPolicyIds.has(p._id.toString())
-    ).length;
     const policyRate =
-      totalPolicies > 0 ? Math.min(100, Math.round((acknowledgedCount / totalPolicies) * 100)) : 100;
+      publishedPoliciesCount > 0
+        ? Math.min(100, Math.round((userAcksCount / publishedPoliciesCount) * 100))
+        : 100;
 
-    const totalTrainings = publishedTrainings.length;
-    const completedTrainingsCount = publishedTrainings.filter((t) => {
-      const p = completedProgressMap.get(t._id.toString());
-      return p && p.status === 'Completed';
-    }).length;
     const trainingRate =
-      totalTrainings > 0
-        ? Math.min(100, Math.round((completedTrainingsCount / totalTrainings) * 100))
+      publishedTrainingsCount > 0
+        ? Math.min(100, Math.round((completedTrainingsCount / publishedTrainingsCount) * 100))
         : 100;
 
     const overallScore = Math.round(policyRate * 0.5 + trainingRate * 0.5);
 
-    // Pending Policies Checklist
-    const pendingPolicies = publishedPolicies
-      .filter((p) => !ackPolicyIds.has(p._id.toString()))
-      .map((p) => ({
-        _id: p._id,
-        title: p.title,
-        category: p.category,
-        version: p.version,
-        effectiveDate: p.effectiveDate,
-      }));
-
-    // Pending / Due Trainings Checklist
-    const pendingTrainings = publishedTrainings
-      .filter((t) => {
-        const p = completedProgressMap.get(t._id.toString());
-        return !p || p.status !== 'Completed';
-      })
-      .map((t) => {
-        const p = completedProgressMap.get(t._id.toString());
-        const isOverdue =
-          t.dueDate && new Date(t.dueDate).getTime() < Date.now();
-        return {
-          _id: t._id,
-          title: t.title,
-          category: t.category,
-          dueDate: t.dueDate,
-          durationMinutes: t.durationMinutes,
-          status: isOverdue ? 'Overdue' : p?.status || 'Not Started',
-          score: p?.score || 0,
-        };
-      });
-
     res.status(200).json({
       success: true,
       myCompliance: {
-        overallScore,
+        totalPolicies: publishedPoliciesCount,
+        acknowledgedPolicies: userAcksCount,
         policyRate,
+        totalTrainings: publishedTrainingsCount,
+        completedTrainings: completedTrainingsCount,
         trainingRate,
-        acknowledgedCount,
-        totalPolicies,
-        completedTrainingsCount,
-        totalTrainings,
-        pendingPolicies,
-        pendingTrainings,
+        overallScore,
+        overdueTrainings: overdueCount,
       },
     });
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch personal compliance profile.',
+      message: 'Failed to retrieve your compliance record from MySQL.',
       error: error.message,
     });
   }

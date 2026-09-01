@@ -1,38 +1,68 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteDepartment = exports.updateDepartment = exports.createDepartment = exports.getDepartments = void 0;
-const Department_1 = require("../models/Department");
-const User_1 = require("../models/User");
+exports.deleteDepartment = exports.updateDepartment = exports.createDepartment = exports.getPublicDepartments = exports.getDepartments = void 0;
+const db_1 = require("../config/db");
 const auditService_1 = require("../services/auditService");
 const getDepartments = async (req, res) => {
     try {
-        const departments = await Department_1.Department.find().sort({ name: 1 });
-        // Calculate staff count per department
-        const departmentsWithCounts = await Promise.all(departments.map(async (dept) => {
-            const staffCount = await User_1.User.countDocuments({
-                department: dept._id,
-                isActive: true,
-            });
-            return {
-                ...dept.toObject(),
-                staffCount,
-            };
+        const departments = await db_1.prisma.department.findMany({
+            include: {
+                _count: {
+                    select: { users: true },
+                },
+            },
+            orderBy: { name: 'asc' },
+        });
+        const enriched = departments.map((d) => ({
+            _id: d.id,
+            id: d.id,
+            name: d.name,
+            description: d.description,
+            site: d.site,
+            staffCount: d._count.users,
+            createdAt: d.createdAt,
+            updatedAt: d.updatedAt,
         }));
         res.status(200).json({
             success: true,
-            count: departmentsWithCounts.length,
-            departments: departmentsWithCounts,
+            count: enriched.length,
+            departments: enriched,
         });
     }
     catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch departments.',
+            message: 'Failed to fetch departments from MySQL.',
             error: error.message,
         });
     }
 };
 exports.getDepartments = getDepartments;
+const getPublicDepartments = async (req, res) => {
+    try {
+        const departments = await db_1.prisma.department.findMany({
+            select: { id: true, name: true, site: true },
+            orderBy: { name: 'asc' },
+        });
+        res.status(200).json({
+            success: true,
+            departments: departments.map((d) => ({
+                _id: d.id,
+                id: d.id,
+                name: d.name,
+                site: d.site,
+            })),
+        });
+    }
+    catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch public department directory.',
+            error: error.message,
+        });
+    }
+};
+exports.getPublicDepartments = getPublicDepartments;
 const createDepartment = async (req, res) => {
     try {
         const { name, description, site } = req.body;
@@ -43,7 +73,10 @@ const createDepartment = async (req, res) => {
             });
             return;
         }
-        const existing = await Department_1.Department.findOne({ name: name.trim() });
+        const trimmedName = name.trim();
+        const existing = await db_1.prisma.department.findUnique({
+            where: { name: trimmedName },
+        });
         if (existing) {
             res.status(409).json({
                 success: false,
@@ -51,25 +84,27 @@ const createDepartment = async (req, res) => {
             });
             return;
         }
-        const department = await Department_1.Department.create({
-            name: name.trim(),
-            description: description?.trim() || '',
-            site: site?.trim() || 'Hemas Hospital Wattala',
+        const department = await db_1.prisma.department.create({
+            data: {
+                name: trimmedName,
+                description: description?.trim() || null,
+                site: site?.trim() || 'Hemas Hospital Wattala',
+            },
         });
         await (0, auditService_1.logAudit)({
-            userId: req.user?._id,
-            userEmail: req.user?.email || 'SYSTEM',
-            userRole: req.user?.role,
-            action: 'USER_CREATED', // department creation
+            userId: req.user.id,
+            userEmail: req.user.email,
+            userRole: req.user.role,
+            action: 'USER_CREATED',
             module: 'DEPARTMENTS',
-            entityId: department._id.toString(),
+            entityId: department.id,
             metadata: { departmentName: department.name },
             req,
         });
         res.status(201).json({
             success: true,
             message: 'Department created successfully.',
-            department,
+            department: { ...department, _id: department.id },
         });
     }
     catch (error) {
@@ -84,22 +119,29 @@ exports.createDepartment = createDepartment;
 const updateDepartment = async (req, res) => {
     try {
         const { name, description, site } = req.body;
-        const department = await Department_1.Department.findById(req.params.id);
-        if (!department) {
-            res.status(404).json({ success: false, message: 'Department not found.' });
-            return;
-        }
-        if (name)
-            department.name = name.trim();
-        if (description !== undefined)
-            department.description = description.trim();
-        if (site)
-            department.site = site.trim();
-        await department.save();
+        const departmentId = req.params.id;
+        const department = await db_1.prisma.department.update({
+            where: { id: departmentId },
+            data: {
+                name: name ? name.trim() : undefined,
+                description: description !== undefined ? description.trim() : undefined,
+                site: site ? site.trim() : undefined,
+            },
+        });
+        await (0, auditService_1.logAudit)({
+            userId: req.user.id,
+            userEmail: req.user.email,
+            userRole: req.user.role,
+            action: 'USER_UPDATED',
+            module: 'DEPARTMENTS',
+            entityId: department.id,
+            metadata: { departmentName: department.name },
+            req,
+        });
         res.status(200).json({
             success: true,
             message: 'Department updated successfully.',
-            department,
+            department: { ...department, _id: department.id },
         });
     }
     catch (error) {
@@ -113,21 +155,21 @@ const updateDepartment = async (req, res) => {
 exports.updateDepartment = updateDepartment;
 const deleteDepartment = async (req, res) => {
     try {
-        const department = await Department_1.Department.findById(req.params.id);
-        if (!department) {
-            res.status(404).json({ success: false, message: 'Department not found.' });
-            return;
-        }
-        // Check if department has users
-        const userCount = await User_1.User.countDocuments({ department: department._id });
-        if (userCount > 0) {
+        const departmentId = req.params.id;
+        // Check staff assigned to this department
+        const staffCount = await db_1.prisma.user.count({
+            where: { departmentId },
+        });
+        if (staffCount > 0) {
             res.status(400).json({
                 success: false,
-                message: `Cannot delete department. There are ${userCount} staff member(s) assigned to it.`,
+                message: `Cannot delete department: ${staffCount} staff member(s) are currently assigned to it. Please reassign them first.`,
             });
             return;
         }
-        await Department_1.Department.findByIdAndDelete(department._id);
+        await db_1.prisma.department.delete({
+            where: { id: departmentId },
+        });
         res.status(200).json({
             success: true,
             message: 'Department deleted successfully.',

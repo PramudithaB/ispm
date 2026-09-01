@@ -77,9 +77,19 @@ export const policyService = {
 export const trainingService = {
   getTrainings: (params?: any) => api.get('/training', { params }),
   getTrainingById: (id: string) => api.get(`/training/${id}`),
-  createTraining: (data: any) => api.post('/training', data),
-  updateTraining: (id: string, data: any) => api.put(`/training/${id}`, data),
+  createTraining: (data: any) =>
+    api.post('/training', data, {
+      headers: data instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : undefined,
+    }),
+  updateTraining: (id: string, data: any) =>
+    api.put(`/training/${id}`, data, {
+      headers: data instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : undefined,
+    }),
+  deleteTraining: (id: string) => api.delete(`/training/${id}`),
   getQuiz: (id: string) => api.get(`/training/${id}/quiz`),
+  getAdminQuiz: (id: string) => api.get(`/training/${id}/admin-quiz`),
+  saveAdminQuiz: (id: string, data: any) => api.put(`/training/${id}/quiz`, data),
+  deleteQuiz: (id: string) => api.delete(`/training/${id}/quiz`),
   submitQuiz: (id: string, data: { answers: Array<{ questionId: string; selectedOption: number }> }) =>
     api.post(`/training/${id}/submit-quiz`, data),
 };

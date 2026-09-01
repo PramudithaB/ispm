@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from './auth';
-import { UserRole } from '../models/User';
+import { UserRole } from '@prisma/client';
 
 export const requireRole = (...allowedRoles: UserRole[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction): void => {

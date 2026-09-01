@@ -3,34 +3,126 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateProfile = exports.getMe = exports.logout = exports.login = void 0;
+exports.updateProfile = exports.getMe = exports.logout = exports.login = exports.register = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const User_1 = require("../models/User");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const db_1 = require("../config/db");
 const env_1 = require("../config/env");
 const auditService_1 = require("../services/auditService");
-const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const generateToken = (user) => {
     return jsonwebtoken_1.default.sign({
-        userId: user._id,
+        userId: user.id,
         email: user.email,
         role: user.role,
-        departmentId: user.department ? user.department.toString() : null,
-    }, env_1.config.jwtSecret, { expiresIn: '7d' });
+        departmentId: user.departmentId,
+    }, env_1.config.jwtSecret, { expiresIn: env_1.config.jwtExpiresIn });
 };
+const register = async (req, res) => {
+    try {
+        const { employeeId, fullName, email, password, department, position, site } = req.body;
+        if (!employeeId || !fullName || !email || !password) {
+            res.status(400).json({
+                success: false,
+                message: 'Employee ID, Full Name, Email, and Password are required.',
+            });
+            return;
+        }
+        if (password.length < 8) {
+            res.status(400).json({
+                success: false,
+                message: 'Password must be at least 8 characters long.',
+            });
+            return;
+        }
+        const normalizedEmail = email.toLowerCase().trim();
+        const normalizedEmpId = employeeId.toUpperCase().trim();
+        const existingEmail = await db_1.prisma.user.findUnique({
+            where: { email: normalizedEmail },
+        });
+        if (existingEmail) {
+            res.status(409).json({
+                success: false,
+                message: 'An account with this email address already exists.',
+            });
+            return;
+        }
+        const existingEmpId = await db_1.prisma.user.findUnique({
+            where: { employeeId: normalizedEmpId },
+        });
+        if (existingEmpId) {
+            res.status(409).json({
+                success: false,
+                message: 'An account with this Employee ID already exists.',
+            });
+            return;
+        }
+        const passwordHash = await bcryptjs_1.default.hash(password, 10);
+        const newUser = await db_1.prisma.user.create({
+            data: {
+                employeeId: normalizedEmpId,
+                fullName: fullName.trim(),
+                email: normalizedEmail,
+                passwordHash,
+                role: 'STAFF',
+                departmentId: department || null,
+                site: site?.trim() || 'Hemas Hospital Wattala',
+                position: position?.trim() || 'Hospital Staff',
+                isActive: true,
+            },
+            include: { department: true },
+        });
+        await (0, auditService_1.logAudit)({
+            userId: newUser.id,
+            userEmail: newUser.email,
+            userRole: 'STAFF',
+            action: 'USER_CREATED',
+            module: 'AUTH',
+            entityId: newUser.id,
+            metadata: { registrationType: 'Self-Registration', employeeId: newUser.employeeId },
+            req,
+        });
+        const token = generateToken(newUser);
+        res.status(201).json({
+            success: true,
+            message: 'Staff account registered successfully.',
+            token,
+            user: {
+                _id: newUser.id,
+                id: newUser.id,
+                employeeId: newUser.employeeId,
+                fullName: newUser.fullName,
+                email: newUser.email,
+                role: newUser.role,
+                department: newUser.department ? { ...newUser.department, _id: newUser.department.id } : null,
+                site: newUser.site,
+                position: newUser.position,
+            },
+        });
+    }
+    catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Registration failed.',
+            error: error.message,
+        });
+    }
+};
+exports.register = register;
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
         if (!email || !password) {
             res.status(400).json({
                 success: false,
-                message: 'Please provide both email and password.',
+                message: 'Email and password are required.',
             });
             return;
         }
         const normalizedEmail = email.toLowerCase().trim();
-        const user = await User_1.User.findOne({ email: normalizedEmail })
-            .select('+passwordHash')
-            .populate('department');
+        const user = await db_1.prisma.user.findUnique({
+            where: { email: normalizedEmail },
+            include: { department: true },
+        });
         if (!user) {
             await (0, auditService_1.logAudit)({
                 userEmail: normalizedEmail,
@@ -41,119 +133,107 @@ const login = async (req, res) => {
             });
             res.status(401).json({
                 success: false,
-                message: 'Invalid email address or password.',
+                message: 'Invalid email or password credentials.',
             });
             return;
         }
         // Check if account is locked
-        if (user.isLocked()) {
-            const lockMinutesRemaining = Math.ceil(((user.lockUntil?.getTime() || 0) - Date.now()) / 60000);
-            await (0, auditService_1.logAudit)({
-                userId: user._id,
-                userEmail: user.email,
-                userRole: user.role,
-                action: 'LOGIN_FAILED',
-                module: 'AUTH',
-                metadata: { reason: 'Account locked', lockMinutesRemaining },
-                req,
-            });
-            res.status(423).json({
+        if (user.lockUntil && new Date(user.lockUntil).getTime() > Date.now()) {
+            const minutesRemaining = Math.ceil((new Date(user.lockUntil).getTime() - Date.now()) / (60 * 1000));
+            res.status(403).json({
                 success: false,
-                message: `Account is temporarily locked due to excessive failed attempts. Try again in ${lockMinutesRemaining} minute(s).`,
+                message: `Account is temporarily locked due to repeated failed logins. Please try again in ${minutesRemaining} minutes or contact IT Security.`,
                 isLocked: true,
             });
             return;
         }
-        // Check if user is active
         if (!user.isActive) {
-            await (0, auditService_1.logAudit)({
-                userId: user._id,
-                userEmail: user.email,
-                userRole: user.role,
-                action: 'LOGIN_FAILED',
-                module: 'AUTH',
-                metadata: { reason: 'Account deactivated' },
-                req,
-            });
             res.status(403).json({
                 success: false,
-                message: 'This account has been deactivated. Please contact your Hospital Administrator.',
+                message: 'Your account has been deactivated. Please contact your Hospital Administrator.',
             });
             return;
         }
-        // Verify password
-        const isMatch = await user.comparePassword(password);
+        const isMatch = await bcryptjs_1.default.compare(password, user.passwordHash);
         if (!isMatch) {
-            user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
-            // Lock account after 5 failed attempts for 15 minutes
-            if (user.failedLoginAttempts >= 5) {
-                user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
-                await (0, auditService_1.logAudit)({
-                    userId: user._id,
-                    userEmail: user.email,
-                    userRole: user.role,
-                    action: 'USER_LOCKED',
-                    module: 'AUTH',
-                    metadata: { attempts: user.failedLoginAttempts },
-                    req,
-                });
+            const newAttempts = user.failedLoginAttempts + 1;
+            let lockUntil = null;
+            if (newAttempts >= 5) {
+                lockUntil = new Date(Date.now() + 15 * 60 * 1000); // 15-minute lock
             }
-            await user.save();
+            await db_1.prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    failedLoginAttempts: newAttempts,
+                    lockUntil,
+                },
+            });
             await (0, auditService_1.logAudit)({
-                userId: user._id,
+                userId: user.id,
                 userEmail: user.email,
                 userRole: user.role,
                 action: 'LOGIN_FAILED',
                 module: 'AUTH',
-                metadata: { attempts: user.failedLoginAttempts, locked: user.isLocked() },
+                metadata: { failedAttempts: newAttempts, isLocked: !!lockUntil },
                 req,
             });
-            const attemptsRemaining = Math.max(0, 5 - user.failedLoginAttempts);
+            if (lockUntil) {
+                res.status(403).json({
+                    success: false,
+                    message: 'Account locked for 15 minutes due to 5 consecutive failed login attempts.',
+                    isLocked: true,
+                });
+                return;
+            }
             res.status(401).json({
                 success: false,
-                message: user.failedLoginAttempts >= 5
-                    ? 'Account locked for 15 minutes due to 5 failed login attempts.'
-                    : `Invalid credentials. ${attemptsRemaining} attempt(s) remaining before account lockout.`,
-                attemptsRemaining,
+                message: `Invalid email or password credentials. ${5 - newAttempts} attempt(s) remaining before lockout.`,
+                attemptsRemaining: 5 - newAttempts,
             });
             return;
         }
-        // Login successful: reset failed login attempts & lock
-        user.failedLoginAttempts = 0;
-        user.lockUntil = null;
-        await user.save();
-        const token = generateToken(user);
+        // Reset failed attempts upon successful authentication
+        if (user.failedLoginAttempts > 0 || user.lockUntil) {
+            await db_1.prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    failedLoginAttempts: 0,
+                    lockUntil: null,
+                },
+            });
+        }
         await (0, auditService_1.logAudit)({
-            userId: user._id,
+            userId: user.id,
             userEmail: user.email,
             userRole: user.role,
             action: 'LOGIN',
             module: 'AUTH',
-            metadata: { site: user.site, position: user.position },
+            metadata: { site: user.site },
             req,
         });
-        const userResponse = {
-            _id: user._id,
-            employeeId: user.employeeId,
-            fullName: user.fullName,
-            email: user.email,
-            role: user.role,
-            department: user.department,
-            site: user.site,
-            position: user.position,
-            isActive: user.isActive,
-        };
+        const token = generateToken(user);
         res.status(200).json({
             success: true,
             message: 'Login successful.',
             token,
-            user: userResponse,
+            user: {
+                _id: user.id,
+                id: user.id,
+                employeeId: user.employeeId,
+                fullName: user.fullName,
+                email: user.email,
+                role: user.role,
+                department: user.department ? { ...user.department, _id: user.department.id } : null,
+                site: user.site,
+                position: user.position,
+                isActive: user.isActive,
+            },
         });
     }
     catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Login processing error.',
+            message: 'Login failed.',
             error: error.message,
         });
     }
@@ -163,7 +243,7 @@ const logout = async (req, res) => {
     try {
         if (req.user) {
             await (0, auditService_1.logAudit)({
-                userId: req.user._id,
+                userId: req.user.id,
                 userEmail: req.user.email,
                 userRole: req.user.role,
                 action: 'LOGOUT',
@@ -179,7 +259,7 @@ const logout = async (req, res) => {
     catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Logout processing error.',
+            message: 'Logout error.',
             error: error.message,
         });
     }
@@ -187,19 +267,34 @@ const logout = async (req, res) => {
 exports.logout = logout;
 const getMe = async (req, res) => {
     try {
-        if (!req.user) {
-            res.status(401).json({ success: false, message: 'Unauthorized' });
+        const user = await db_1.prisma.user.findUnique({
+            where: { id: req.user.id },
+            include: { department: true },
+        });
+        if (!user) {
+            res.status(404).json({ success: false, message: 'User not found.' });
             return;
         }
         res.status(200).json({
             success: true,
-            user: req.user,
+            user: {
+                _id: user.id,
+                id: user.id,
+                employeeId: user.employeeId,
+                fullName: user.fullName,
+                email: user.email,
+                role: user.role,
+                department: user.department ? { ...user.department, _id: user.department.id } : null,
+                site: user.site,
+                position: user.position,
+                isActive: user.isActive,
+            },
         });
     }
     catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch current user profile.',
+            message: 'Failed to retrieve user profile.',
             error: error.message,
         });
     }
@@ -207,66 +302,40 @@ const getMe = async (req, res) => {
 exports.getMe = getMe;
 const updateProfile = async (req, res) => {
     try {
-        if (!req.user) {
-            res.status(401).json({ success: false, message: 'Unauthorized' });
-            return;
-        }
-        const { fullName, currentPassword, newPassword } = req.body;
-        const user = await User_1.User.findById(req.user._id).select('+passwordHash');
-        if (!user) {
-            res.status(404).json({ success: false, message: 'User not found' });
-            return;
-        }
-        if (fullName) {
-            user.fullName = fullName.trim();
-        }
-        if (newPassword) {
-            if (!currentPassword) {
-                res.status(400).json({
-                    success: false,
-                    message: 'Current password is required to set a new password.',
-                });
-                return;
-            }
-            const isMatch = await user.comparePassword(currentPassword);
-            if (!isMatch) {
-                res.status(400).json({
-                    success: false,
-                    message: 'Current password is incorrect.',
-                });
-                return;
-            }
-            if (newPassword.length < 8) {
-                res.status(400).json({
-                    success: false,
-                    message: 'New password must be at least 8 characters long.',
-                });
-                return;
-            }
-            user.passwordHash = await bcryptjs_1.default.hash(newPassword, 10);
-        }
-        await user.save();
+        const { fullName, position, site } = req.body;
+        const userId = req.user.id;
+        const updatedUser = await db_1.prisma.user.update({
+            where: { id: userId },
+            data: {
+                fullName: fullName?.trim() || undefined,
+                position: position?.trim() || undefined,
+                site: site?.trim() || undefined,
+            },
+            include: { department: true },
+        });
         await (0, auditService_1.logAudit)({
-            userId: user._id,
-            userEmail: user.email,
-            userRole: user.role,
+            userId,
+            userEmail: updatedUser.email,
+            userRole: updatedUser.role,
             action: 'USER_UPDATED',
             module: 'USERS',
-            metadata: { updatedFields: { fullName: !!fullName, password: !!newPassword } },
+            entityId: userId,
+            metadata: { profileUpdate: true },
             req,
         });
         res.status(200).json({
             success: true,
             message: 'Profile updated successfully.',
             user: {
-                _id: user._id,
-                employeeId: user.employeeId,
-                fullName: user.fullName,
-                email: user.email,
-                role: user.role,
-                department: user.department,
-                site: user.site,
-                position: user.position,
+                _id: updatedUser.id,
+                id: updatedUser.id,
+                employeeId: updatedUser.employeeId,
+                fullName: updatedUser.fullName,
+                email: updatedUser.email,
+                role: updatedUser.role,
+                department: updatedUser.department ? { ...updatedUser.department, _id: updatedUser.department.id } : null,
+                site: updatedUser.site,
+                position: updatedUser.position,
             },
         });
     }

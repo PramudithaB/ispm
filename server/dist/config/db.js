@@ -1,49 +1,34 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.disconnectDB = exports.connectDB = void 0;
-const mongoose_1 = __importDefault(require("mongoose"));
-const mongodb_memory_server_1 = require("mongodb-memory-server");
-const env_1 = require("./env");
-let mongoServer = null;
+exports.disconnectDB = exports.connectDB = exports.prisma = void 0;
+const client_1 = require("@prisma/client");
+exports.prisma = global.prismaClient ||
+    new client_1.PrismaClient({
+        log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+    });
+if (process.env.NODE_ENV !== 'production') {
+    global.prismaClient = exports.prisma;
+}
 const connectDB = async () => {
-    let uri = env_1.config.mongoUri;
-    if (!uri) {
-        console.log('ℹ️  No MONGODB_URI provided in .env. Initializing in-memory embedded MongoDB instance...');
-        mongoServer = await mongodb_memory_server_1.MongoMemoryServer.create();
-        uri = mongoServer.getUri();
-    }
     try {
-        await mongoose_1.default.connect(uri);
-        console.log(`✅ MongoDB Connected successfully to: ${uri.startsWith('mongodb+srv') ? 'MongoDB Atlas Cloud' : 'Embedded / Local MongoDB'}`);
-        return uri;
+        await exports.prisma.$connect();
+        // Test connection with a lightweight query
+        await exports.prisma.$queryRaw `SELECT 1`;
+        console.log('✅ MySQL Database Connected successfully via Prisma ORM');
     }
     catch (error) {
-        console.error('❌ MongoDB Connection Error:', error);
-        if (!mongoServer) {
-            console.log('⚠️ Falling back to embedded MongoDB instance...');
-            mongoServer = await mongodb_memory_server_1.MongoMemoryServer.create();
-            uri = mongoServer.getUri();
-            await mongoose_1.default.connect(uri);
-            console.log('✅ Connected to embedded fallback MongoDB instance');
-            return uri;
-        }
+        console.error('❌ MySQL Connection Error:', error);
         throw error;
     }
 };
 exports.connectDB = connectDB;
 const disconnectDB = async () => {
     try {
-        await mongoose_1.default.disconnect();
-        if (mongoServer) {
-            await mongoServer.stop();
-        }
-        console.log('🔌 MongoDB Disconnected');
+        await exports.prisma.$disconnect();
+        console.log('🔌 MySQL Database Disconnected');
     }
     catch (error) {
-        console.error('Error disconnecting MongoDB:', error);
+        console.error('Error disconnecting MySQL:', error);
     }
 };
 exports.disconnectDB = disconnectDB;

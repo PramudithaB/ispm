@@ -14,6 +14,7 @@ import {
   Bell,
   User,
   ShieldCheck,
+  LogOut,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -25,10 +26,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isMobileOpen,
   onCloseMobile,
 }) => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const role = user?.role;
 
-  // Build navigation items dynamically based on role
+  // Build navigation items dynamically based on exact role specification
   const navItems = [
     {
       to: '/dashboard',
@@ -44,7 +45,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       to: '/training',
-      label: 'Training & Quizzes',
+      label: 'Training',
       icon: <GraduationCap className="w-5 h-5" />,
       show: true,
     },
@@ -54,8 +55,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         role === 'STAFF'
           ? 'My Compliance'
           : role === 'DEPARTMENT_HEAD'
-          ? 'Dept Compliance'
-          : 'Compliance Matrix',
+          ? 'Department Compliance'
+          : 'Compliance',
       icon: <CheckCircle className="w-5 h-5" />,
       show: true,
     },
@@ -66,26 +67,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       show: true,
     },
     {
-      to: '/users',
-      label: 'Staff Directory',
-      icon: <Users className="w-5 h-5" />,
-      show: role === 'ADMIN' || role === 'IT_SECURITY_ADMIN' || role === 'DEPARTMENT_HEAD',
-    },
-    {
-      to: '/departments',
-      label: 'Departments',
-      icon: <Building2 className="w-5 h-5" />,
-      show: role === 'ADMIN' || role === 'IT_SECURITY_ADMIN',
-    },
-    {
       to: '/reports',
-      label: 'Compliance Reports',
+      label: 'Reports',
       icon: <FileSpreadsheet className="w-5 h-5" />,
       show: role === 'ADMIN' || role === 'IT_SECURITY_ADMIN' || role === 'DEPARTMENT_HEAD',
     },
     {
       to: '/audit-logs',
-      label: 'Audit Trail',
+      label: 'Audit Logs',
       icon: <Activity className="w-5 h-5" />,
       show: role === 'ADMIN' || role === 'IT_SECURITY_ADMIN',
     },
@@ -171,6 +160,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   )}
                 </NavLink>
               ))}
+
+              {/* Logout Item */}
+              <button
+                type="button"
+                onClick={() => {
+                  onCloseMobile();
+                  logout();
+                }}
+                className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-all text-left"
+              >
+                <span className="text-rose-500">
+                  <LogOut className="w-5 h-5" />
+                </span>
+                <span>Logout</span>
+              </button>
             </nav>
           </div>
         </div>

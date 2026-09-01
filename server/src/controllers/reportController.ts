@@ -1,12 +1,5 @@
 import { Response } from 'express';
-import { User } from '../models/User';
-import { Department } from '../models/Department';
-import { Policy } from '../models/Policy';
-import { PolicyAcknowledgement } from '../models/PolicyAcknowledgement';
-import { TrainingModule } from '../models/TrainingModule';
-import { TrainingProgress } from '../models/TrainingProgress';
-import { Incident } from '../models/Incident';
-import { AuditLog } from '../models/AuditLog';
+import { prisma } from '../config/db';
 import { AuthRequest } from '../middleware/auth';
 import { logAudit } from '../services/auditService';
 
@@ -34,17 +27,23 @@ export const exportComplianceReport = async (req: AuthRequest, res: Response): P
   try {
     const { format = 'json' } = req.query;
 
-    const [departments, publishedPolicies, publishedTrainings] = await Promise.all([
-      Department.find().sort({ name: 1 }),
-      Policy.find({ status: 'Published' }),
-      TrainingModule.find({ status: 'Published' }),
+    const [departments, publishedPoliciesCount, publishedTrainingsCount] = await Promise.all([
+      prisma.department.findMany({ orderBy: { name: 'asc' } }),
+      prisma.policy.count({ where: { status: 'Published' } }),
+      prisma.trainingModule.count({ where: { status: 'Published' } }),
     ]);
+
+    const now = new Date();
 
     const reportData = await Promise.all(
       departments.map(async (dept) => {
-        const staff = await User.find({ department: dept._id, isActive: true });
+        const staff = await prisma.user.findMany({
+          where: { departmentId: dept.id, isActive: true },
+          select: { id: true },
+        });
+
         const staffCount = staff.length;
-        const staffIds = staff.map((s) => s._id);
+        const staffIds = staff.map((s) => s.id);
 
         let policyAckRate = 100;
         let trainingCompletionRate = 100;
@@ -52,22 +51,25 @@ export const exportComplianceReport = async (req: AuthRequest, res: Response): P
 
         if (staffCount > 0) {
           const [acks, completions, overdue] = await Promise.all([
-            PolicyAcknowledgement.countDocuments({ userId: { $in: staffIds } }),
-            TrainingProgress.countDocuments({
-              userId: { $in: staffIds },
-              status: 'Completed',
+            prisma.policyAcknowledgement.count({
+              where: { userId: { in: staffIds } },
             }),
-            TrainingProgress.countDocuments({
-              userId: { $in: staffIds },
-              status: { $ne: 'Completed' },
-              dueDate: { $lt: new Date() },
+            prisma.trainingProgress.count({
+              where: { userId: { in: staffIds }, status: 'Completed' },
+            }),
+            prisma.trainingProgress.count({
+              where: {
+                userId: { in: staffIds },
+                status: { not: 'Completed' },
+                dueDate: { lt: now },
+              },
             }),
           ]);
 
-          const expectedAcks = staffCount * publishedPolicies.length;
+          const expectedAcks = staffCount * publishedPoliciesCount;
           policyAckRate = expectedAcks > 0 ? Math.min(100, Math.round((acks / expectedAcks) * 100)) : 100;
 
-          const expectedTrainings = staffCount * publishedTrainings.length;
+          const expectedTrainings = staffCount * publishedTrainingsCount;
           trainingCompletionRate =
             expectedTrainings > 0
               ? Math.min(100, Math.round((completions / expectedTrainings) * 100))
@@ -91,7 +93,7 @@ export const exportComplianceReport = async (req: AuthRequest, res: Response): P
     );
 
     await logAudit({
-      userId: req.user?._id,
+      userId: req.user?.id,
       userEmail: req.user?.email || 'SYSTEM',
       userRole: req.user?.role,
       action: 'EXPORT_REPORT',
@@ -130,13 +132,16 @@ export const exportIncidentsReport = async (req: AuthRequest, res: Response): Pr
   try {
     const { format = 'json' } = req.query;
 
-    const incidents = await Incident.find()
-      .populate('reportedBy', 'fullName employeeId email')
-      .populate('assignedTo', 'fullName email')
-      .populate('department', 'name site')
-      .sort({ createdAt: -1 });
+    const incidents = await prisma.incident.findMany({
+      include: {
+        reportedBy: { select: { fullName: true, employeeId: true, email: true } },
+        assignedTo: { select: { fullName: true, email: true } },
+        department: { select: { name: true, site: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
-    const reportData = incidents.map((inc: any) => ({
+    const reportData = incidents.map((inc) => ({
       IncidentNumber: inc.incidentNumber,
       Type: inc.incidentType,
       Title: inc.title,
@@ -152,7 +157,7 @@ export const exportIncidentsReport = async (req: AuthRequest, res: Response): Pr
     }));
 
     await logAudit({
-      userId: req.user?._id,
+      userId: req.user?.id,
       userEmail: req.user?.email || 'SYSTEM',
       userRole: req.user?.role,
       action: 'EXPORT_REPORT',
@@ -191,27 +196,30 @@ export const exportTrainingReport = async (req: AuthRequest, res: Response): Pro
   try {
     const { format = 'json' } = req.query;
 
-    const progresses = await TrainingProgress.find()
-      .populate('userId', 'fullName employeeId email department position')
-      .populate('trainingModuleId', 'title category passingScore durationMinutes')
-      .sort({ updatedAt: -1 });
+    const progresses = await prisma.trainingProgress.findMany({
+      include: {
+        user: { select: { fullName: true, employeeId: true, email: true, position: true } },
+        trainingModule: { select: { title: true, category: true, passingScore: true, durationMinutes: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
 
-    const reportData = progresses.map((p: any) => ({
-      EmployeeName: p.userId?.fullName || 'Unknown',
-      EmployeeID: p.userId?.employeeId || 'N/A',
-      Email: p.userId?.email || 'N/A',
-      TrainingTitle: p.trainingModuleId?.title || 'Unknown',
-      Category: p.trainingModuleId?.category || 'N/A',
+    const reportData = progresses.map((p) => ({
+      EmployeeName: p.user?.fullName || 'Unknown',
+      EmployeeID: p.user?.employeeId || 'N/A',
+      Email: p.user?.email || 'N/A',
+      TrainingTitle: p.trainingModule?.title || 'Unknown',
+      Category: p.trainingModule?.category || 'N/A',
       Status: p.status,
-      Score: `${p.score || 0}%`,
-      Attempts: p.attempts || 0,
+      Score: `${p.score}%`,
+      Attempts: p.attempts,
       StartedAt: p.startedAt ? new Date(p.startedAt).toISOString() : 'N/A',
       CompletedAt: p.completedAt ? new Date(p.completedAt).toISOString() : 'N/A',
       DueDate: p.dueDate ? new Date(p.dueDate).toISOString() : 'N/A',
     }));
 
     await logAudit({
-      userId: req.user?._id,
+      userId: req.user?.id,
       userEmail: req.user?.email || 'SYSTEM',
       userRole: req.user?.role,
       action: 'EXPORT_REPORT',
@@ -250,12 +258,12 @@ export const exportAuditLogsReport = async (req: AuthRequest, res: Response): Pr
   try {
     const { format = 'json' } = req.query;
 
-    const logs = await AuditLog.find()
-      .populate('userId', 'fullName employeeId')
-      .sort({ timestamp: -1 })
-      .limit(1000);
+    const logs = await prisma.auditLog.findMany({
+      orderBy: { timestamp: 'desc' },
+      take: 1000,
+    });
 
-    const reportData = logs.map((log: any) => ({
+    const reportData = logs.map((log) => ({
       Timestamp: new Date(log.timestamp).toISOString(),
       Action: log.action,
       Module: log.module,
@@ -267,7 +275,7 @@ export const exportAuditLogsReport = async (req: AuthRequest, res: Response): Pr
     }));
 
     await logAudit({
-      userId: req.user?._id,
+      userId: req.user?.id,
       userEmail: req.user?.email || 'SYSTEM',
       userRole: req.user?.role,
       action: 'EXPORT_REPORT',

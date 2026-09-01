@@ -1,8 +1,5 @@
 import { Response } from 'express';
-import { Policy, IPolicy } from '../models/Policy';
-import { PolicyAcknowledgement } from '../models/PolicyAcknowledgement';
-import { Notification } from '../models/Notification';
-import { User } from '../models/User';
+import { prisma } from '../config/db';
 import { AuthRequest } from '../middleware/auth';
 import { logAudit } from '../services/auditService';
 
@@ -11,48 +8,70 @@ export const getPolicies = async (req: AuthRequest, res: Response): Promise<void
     const { category, department, search, status } = req.query;
     const user = req.user;
 
-    const filter: any = {};
+    const where: any = {};
 
     // Staff can ONLY see Published policies
     if (user?.role === 'STAFF') {
-      filter.status = 'Published';
+      where.status = 'Published';
     } else if (status) {
-      filter.status = status;
+      where.status = status as string;
     }
 
-    if (category) filter.category = category;
-    if (department) filter.department = department;
+    if (category) where.category = category as string;
+    if (department) where.departmentId = department as string;
 
     if (search) {
-      const searchRegex = new RegExp(search as string, 'i');
-      filter.$or = [{ title: searchRegex }, { description: searchRegex }, { content: searchRegex }];
+      const q = String(search);
+      where.OR = [
+        { title: { contains: q } },
+        { description: { contains: q } },
+        { content: { contains: q } },
+      ];
     }
 
-    const policies = await Policy.find(filter)
-      .populate('department', 'name site')
-      .populate('createdBy', 'fullName email')
-      .populate('updatedBy', 'fullName email')
-      .sort({ updatedAt: -1 });
+    const policies = await prisma.policy.findMany({
+      where,
+      include: {
+        department: true,
+        createdBy: { select: { id: true, fullName: true, email: true } },
+        updatedBy: { select: { id: true, fullName: true, email: true } },
+        versions: { orderBy: { createdAt: 'desc' } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
 
-    // For each policy, check if the current user has acknowledged the current version
-    let enrichedPolicies: any[] = policies.map((p) => p.toObject());
+    let enrichedPolicies: any[] = policies;
 
     if (user) {
-      const userAcks = await PolicyAcknowledgement.find({
-        userId: user._id,
+      const userAcks = await prisma.policyAcknowledgement.findMany({
+        where: { userId: user.id },
       });
 
       const ackMap = new Set(
-        userAcks.map((ack) => `${ack.policyId.toString()}_${ack.policyVersion}`)
+        userAcks.map((ack) => `${ack.policyId}_${ack.policyVersion}`)
       );
 
-      enrichedPolicies = enrichedPolicies.map((p) => {
-        const isAcknowledged = ackMap.has(`${p._id.toString()}_${p.version}`);
+      enrichedPolicies = policies.map((p) => {
+        const isAcknowledged = ackMap.has(`${p.id}_${p.version}`);
         return {
           ...p,
+          _id: p.id,
+          department: p.department ? { ...p.department, _id: p.department.id } : null,
+          createdBy: p.createdBy ? { ...p.createdBy, _id: p.createdBy.id } : null,
+          updatedBy: p.updatedBy ? { ...p.updatedBy, _id: p.updatedBy.id } : null,
+          previousVersions: p.versions.map((v) => ({ ...v, _id: v.id })),
           isAcknowledged,
         };
       });
+    } else {
+      enrichedPolicies = policies.map((p) => ({
+        ...p,
+        _id: p.id,
+        department: p.department ? { ...p.department, _id: p.department.id } : null,
+        createdBy: p.createdBy ? { ...p.createdBy, _id: p.createdBy.id } : null,
+        updatedBy: p.updatedBy ? { ...p.updatedBy, _id: p.updatedBy.id } : null,
+        previousVersions: p.versions.map((v) => ({ ...v, _id: v.id })),
+      }));
     }
 
     res.status(200).json({
@@ -71,10 +90,18 @@ export const getPolicies = async (req: AuthRequest, res: Response): Promise<void
 
 export const getPolicyById = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const policy = await Policy.findById(req.params.id)
-      .populate('department', 'name site')
-      .populate('createdBy', 'fullName email position')
-      .populate('updatedBy', 'fullName email position');
+    const policy = await prisma.policy.findUnique({
+      where: { id: req.params.id },
+      include: {
+        department: true,
+        createdBy: { select: { id: true, fullName: true, email: true, position: true } },
+        updatedBy: { select: { id: true, fullName: true, email: true, position: true } },
+        versions: {
+          orderBy: { createdAt: 'desc' },
+          include: { changedBy: { select: { id: true, fullName: true } } },
+        },
+      },
+    });
 
     if (!policy) {
       res.status(404).json({ success: false, message: 'Policy not found.' });
@@ -91,25 +118,32 @@ export const getPolicyById = async (req: AuthRequest, res: Response): Promise<vo
     }
 
     let isAcknowledged = false;
-    let acknowledgementDetails = null;
+    let acknowledgementDetails: any = null;
 
     if (req.user) {
-      const ack = await PolicyAcknowledgement.findOne({
-        policyId: policy._id,
-        policyVersion: policy.version,
-        userId: req.user._id,
+      const ack = await prisma.policyAcknowledgement.findFirst({
+        where: {
+          policyId: policy.id,
+          policyVersion: policy.version,
+          userId: req.user.id,
+        },
       });
 
       if (ack) {
         isAcknowledged = true;
-        acknowledgementDetails = ack;
+        acknowledgementDetails = { ...ack, _id: ack.id };
       }
     }
 
     res.status(200).json({
       success: true,
       policy: {
-        ...policy.toObject(),
+        ...policy,
+        _id: policy.id,
+        department: policy.department ? { ...policy.department, _id: policy.department.id } : null,
+        createdBy: policy.createdBy ? { ...policy.createdBy, _id: policy.createdBy.id } : null,
+        updatedBy: policy.updatedBy ? { ...policy.updatedBy, _id: policy.updatedBy.id } : null,
+        previousVersions: policy.versions.map((v) => ({ ...v, _id: v.id })),
         isAcknowledged,
         acknowledgementDetails,
       },
@@ -135,28 +169,48 @@ export const createPolicy = async (req: AuthRequest, res: Response): Promise<voi
       return;
     }
 
-    const policy = await Policy.create({
-      title: title.trim(),
-      description: description.trim(),
-      content,
-      category,
-      department: department || null,
-      effectiveDate: effectiveDate || new Date(),
-      status: status || 'Draft',
-      version: version || '1.0',
-      publishedAt: status === 'Published' ? new Date() : null,
-      createdBy: req.user?._id,
-      updatedBy: req.user?._id,
-      previousVersions: [],
+    const policyVersion = version || '1.0';
+    const policyStatus = status || 'Draft';
+
+    const policy = await prisma.policy.create({
+      data: {
+        title: title.trim(),
+        description: description.trim(),
+        content,
+        category,
+        departmentId: department || null,
+        effectiveDate: effectiveDate ? new Date(effectiveDate) : new Date(),
+        status: policyStatus,
+        version: policyVersion,
+        publishedAt: policyStatus === 'Published' ? new Date() : null,
+        changelog: 'Initial policy creation',
+        createdById: req.user!.id,
+        updatedById: req.user!.id,
+        versions: {
+          create: {
+            version: policyVersion,
+            title: title.trim(),
+            content,
+            changelog: 'Initial policy version',
+            publishedAt: policyStatus === 'Published' ? new Date() : null,
+            changedById: req.user!.id,
+          },
+        },
+      },
+      include: {
+        department: true,
+        createdBy: { select: { id: true, fullName: true, email: true } },
+        versions: true,
+      },
     });
 
     await logAudit({
-      userId: req.user?._id,
-      userEmail: req.user?.email || 'SYSTEM',
-      userRole: req.user?.role,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      userRole: req.user!.role,
       action: 'CREATE_POLICY',
       module: 'POLICIES',
-      entityId: policy._id.toString(),
+      entityId: policy.id,
       metadata: { title: policy.title, version: policy.version, status: policy.status },
       req,
     });
@@ -164,7 +218,11 @@ export const createPolicy = async (req: AuthRequest, res: Response): Promise<voi
     res.status(201).json({
       success: true,
       message: 'Policy created successfully.',
-      policy,
+      policy: {
+        ...policy,
+        _id: policy.id,
+        previousVersions: policy.versions.map((v) => ({ ...v, _id: v.id })),
+      },
     });
   } catch (error: any) {
     res.status(500).json({
@@ -178,54 +236,89 @@ export const createPolicy = async (req: AuthRequest, res: Response): Promise<voi
 export const updatePolicy = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { title, description, content, category, department, changelog, newVersion, status } = req.body;
-    const policy = await Policy.findById(req.params.id);
+    const policyId = req.params.id;
 
-    if (!policy) {
+    const existingPolicy = await prisma.policy.findUnique({
+      where: { id: policyId },
+    });
+
+    if (!existingPolicy) {
       res.status(404).json({ success: false, message: 'Policy not found.' });
       return;
     }
 
-    // If updating content or major fields, archive the existing version
-    if (newVersion && newVersion !== policy.version) {
-      policy.previousVersions.push({
-        version: policy.version,
-        title: policy.title,
-        content: policy.content,
-        changelog: policy.changelog || 'Previous version',
-        publishedAt: policy.publishedAt || undefined,
-        archivedAt: new Date(),
-        changedBy: req.user?._id,
+    // Execute multi-step policy versioning inside a MySQL Transaction
+    const updatedPolicy = await prisma.$transaction(async (tx) => {
+      // If version changed, archive existing version into policy_versions
+      if (newVersion && newVersion !== existingPolicy.version) {
+        await tx.policyVersion.upsert({
+          where: {
+            policyId_version: {
+              policyId: existingPolicy.id,
+              version: existingPolicy.version,
+            },
+          },
+          update: {
+            title: existingPolicy.title,
+            content: existingPolicy.content,
+            changelog: existingPolicy.changelog || 'Previous version',
+            archivedAt: new Date(),
+            changedById: req.user!.id,
+          },
+          create: {
+            policyId: existingPolicy.id,
+            version: existingPolicy.version,
+            title: existingPolicy.title,
+            content: existingPolicy.content,
+            changelog: existingPolicy.changelog || 'Previous version',
+            publishedAt: existingPolicy.publishedAt,
+            archivedAt: new Date(),
+            changedById: req.user!.id,
+          },
+        });
+      }
+
+      return tx.policy.update({
+        where: { id: policyId },
+        data: {
+          title: title ? title.trim() : undefined,
+          description: description ? description.trim() : undefined,
+          content: content || undefined,
+          category: category || undefined,
+          departmentId: department !== undefined ? department || null : undefined,
+          status: status || undefined,
+          version: newVersion || undefined,
+          changelog: changelog || (newVersion ? `Updated to version ${newVersion}` : undefined),
+          updatedById: req.user!.id,
+        },
+        include: {
+          department: true,
+          createdBy: { select: { id: true, fullName: true, email: true } },
+          updatedBy: { select: { id: true, fullName: true, email: true } },
+          versions: { orderBy: { createdAt: 'desc' } },
+        },
       });
-
-      policy.version = newVersion;
-      policy.changelog = changelog || `Updated to version ${newVersion}`;
-    }
-
-    if (title) policy.title = title.trim();
-    if (description) policy.description = description.trim();
-    if (content) policy.content = content;
-    if (category) policy.category = category;
-    if (department !== undefined) policy.department = department || null;
-    if (status) policy.status = status;
-
-    policy.updatedBy = req.user!._id;
-    await policy.save();
+    });
 
     await logAudit({
-      userId: req.user?._id,
-      userEmail: req.user?.email || 'SYSTEM',
-      userRole: req.user?.role,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      userRole: req.user!.role,
       action: 'UPDATE_POLICY',
       module: 'POLICIES',
-      entityId: policy._id.toString(),
-      metadata: { title: policy.title, version: policy.version, changelog },
+      entityId: updatedPolicy.id,
+      metadata: { title: updatedPolicy.title, version: updatedPolicy.version, changelog },
       req,
     });
 
     res.status(200).json({
       success: true,
       message: 'Policy updated successfully.',
-      policy,
+      policy: {
+        ...updatedPolicy,
+        _id: updatedPolicy.id,
+        previousVersions: updatedPolicy.versions.map((v) => ({ ...v, _id: v.id })),
+      },
     });
   } catch (error: any) {
     res.status(500).json({
@@ -238,88 +331,127 @@ export const updatePolicy = async (req: AuthRequest, res: Response): Promise<voi
 
 export const publishPolicy = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const policy = await Policy.findById(req.params.id);
-    if (!policy) {
-      res.status(404).json({ success: false, message: 'Policy not found.' });
-      return;
-    }
+    const policyId = req.params.id;
 
-    policy.status = 'Published';
-    policy.publishedAt = new Date();
-    policy.updatedBy = req.user!._id;
-    await policy.save();
+    // Use MySQL Transaction for publishing policy and generating notifications
+    const policy = await prisma.$transaction(async (tx) => {
+      const p = await tx.policy.findUnique({ where: { id: policyId } });
+      if (!p) throw new Error('Policy not found');
+
+      const now = new Date();
+
+      const updated = await tx.policy.update({
+        where: { id: policyId },
+        data: {
+          status: 'Published',
+          publishedAt: now,
+          updatedById: req.user!.id,
+        },
+        include: {
+          department: true,
+          versions: true,
+        },
+      });
+
+      // Upsert policy version for the published version
+      await tx.policyVersion.upsert({
+        where: {
+          policyId_version: {
+            policyId: updated.id,
+            version: updated.version,
+          },
+        },
+        update: {
+          publishedAt: now,
+          changedById: req.user!.id,
+        },
+        create: {
+          policyId: updated.id,
+          version: updated.version,
+          title: updated.title,
+          content: updated.content,
+          changelog: updated.changelog || 'Published policy version',
+          publishedAt: now,
+          changedById: req.user!.id,
+        },
+      });
+
+      // Broadcast notifications to all active staff members
+      const activeUsers = await tx.user.findMany({
+        where: {
+          isActive: true,
+          ...(updated.departmentId ? { departmentId: updated.departmentId } : {}),
+        },
+        select: { id: true },
+      });
+
+      if (activeUsers.length > 0) {
+        await tx.notification.createMany({
+          data: activeUsers.map((u) => ({
+            userId: u.id,
+            title: 'New Policy Published',
+            message: `Mandatory security policy "${updated.title}" (v${updated.version}) is now published and requires your acknowledgement.`,
+            type: 'policy',
+            link: `/policies/${updated.id}`,
+          })),
+        });
+      }
+
+      return updated;
+    });
 
     await logAudit({
-      userId: req.user?._id,
-      userEmail: req.user?.email || 'SYSTEM',
-      userRole: req.user?.role,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      userRole: req.user!.role,
       action: 'PUBLISH_POLICY',
       module: 'POLICIES',
-      entityId: policy._id.toString(),
+      entityId: policy.id,
       metadata: { title: policy.title, version: policy.version },
       req,
     });
 
-    // Notify users
-    const userQuery: any = { isActive: true };
-    if (policy.department) {
-      userQuery.department = policy.department;
-    }
-
-    const targetUsers = await User.find(userQuery).select('_id');
-    const notifications = targetUsers.map((u) => ({
-      userId: u._id,
-      title: 'New Security Policy Published',
-      message: `Policy "${policy.title}" (v${policy.version}) has been published and requires your acknowledgement.`,
-      type: 'policy',
-      link: `/policies/${policy._id}`,
-    }));
-
-    if (notifications.length > 0) {
-      await Notification.insertMany(notifications);
-    }
-
     res.status(200).json({
       success: true,
-      message: `Policy "${policy.title}" published successfully. Notifications sent to ${targetUsers.length} staff member(s).`,
-      policy,
+      message: `Policy "${policy.title}" published successfully. Notifications sent to hospital staff.`,
+      policy: {
+        ...policy,
+        _id: policy.id,
+      },
     });
   } catch (error: any) {
-    res.status(500).json({
+    res.status(error.message === 'Policy not found' ? 404 : 500).json({
       success: false,
-      message: 'Failed to publish policy.',
-      error: error.message,
+      message: error.message || 'Failed to publish policy.',
     });
   }
 };
 
 export const archivePolicy = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const policy = await Policy.findById(req.params.id);
-    if (!policy) {
-      res.status(404).json({ success: false, message: 'Policy not found.' });
-      return;
-    }
-
-    policy.status = 'Archived';
-    policy.updatedBy = req.user!._id;
-    await policy.save();
+    const policy = await prisma.policy.update({
+      where: { id: req.params.id },
+      data: {
+        status: 'Archived',
+        updatedById: req.user!.id,
+      },
+    });
 
     await logAudit({
-      userId: req.user?._id,
-      userEmail: req.user?.email || 'SYSTEM',
-      userRole: req.user?.role,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      userRole: req.user!.role,
       action: 'ARCHIVE_POLICY',
       module: 'POLICIES',
-      entityId: policy._id.toString(),
+      entityId: policy.id,
       metadata: { title: policy.title, version: policy.version },
       req,
     });
 
     res.status(200).json({
       success: true,
-      message: `Policy "${policy.title}" archived.`,
-      policy,
+      message: 'Policy archived successfully.',
+      policy: { ...policy, _id: policy.id },
     });
   } catch (error: any) {
     res.status(500).json({
@@ -332,7 +464,15 @@ export const archivePolicy = async (req: AuthRequest, res: Response): Promise<vo
 
 export const acknowledgePolicy = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const policy = await Policy.findById(req.params.id);
+    const policyId = req.params.id;
+    const userId = req.user!.id;
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+    const userAgent = req.headers['user-agent'] || 'Unknown Browser';
+
+    const policy = await prisma.policy.findUnique({
+      where: { id: policyId },
+    });
+
     if (!policy) {
       res.status(404).json({ success: false, message: 'Policy not found.' });
       return;
@@ -346,61 +486,70 @@ export const acknowledgePolicy = async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    const userId = req.user!._id;
-    const policyVersion = policy.version;
-
-    // Check if already acknowledged
-    const existing = await PolicyAcknowledgement.findOne({
-      policyId: policy._id,
-      policyVersion,
-      userId,
-    });
-
-    if (existing) {
-      res.status(409).json({
-        success: false,
-        message: `You have already acknowledged policy "${policy.title}" version ${policyVersion} on ${existing.acknowledgedAt.toLocaleDateString()}.`,
-        acknowledgement: existing,
+    // Use transaction for policy acknowledgement & audit
+    const acknowledgement = await prisma.$transaction(async (tx) => {
+      // Find matching policy version ID if available
+      const policyVer = await tx.policyVersion.findUnique({
+        where: {
+          policyId_version: {
+            policyId: policy.id,
+            version: policy.version,
+          },
+        },
       });
-      return;
-    }
 
-    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
-    const userAgent = req.headers['user-agent'] || '';
-
-    const acknowledgement = await PolicyAcknowledgement.create({
-      policyId: policy._id,
-      policyVersion,
-      userId,
-      acknowledgedAt: new Date(),
-      ipAddress,
-      userAgent,
+      return tx.policyAcknowledgement.upsert({
+        where: {
+          policyId_policyVersion_userId: {
+            policyId: policy.id,
+            policyVersion: policy.version,
+            userId,
+          },
+        },
+        update: {
+          acknowledgedAt: new Date(),
+          ipAddress,
+          userAgent,
+        },
+        create: {
+          policyId: policy.id,
+          policyVersionId: policyVer?.id || null,
+          policyVersion: policy.version,
+          userId,
+          acknowledgedAt: new Date(),
+          ipAddress,
+          userAgent,
+        },
+      });
     });
 
     await logAudit({
       userId,
-      userEmail: req.user?.email || 'SYSTEM',
-      userRole: req.user?.role,
+      userEmail: req.user!.email,
+      userRole: req.user!.role,
       action: 'ACKNOWLEDGE_POLICY',
       module: 'POLICIES',
-      entityId: policy._id.toString(),
+      entityId: policy.id,
       metadata: {
         policyTitle: policy.title,
-        policyVersion,
-        ackId: acknowledgement._id,
+        policyVersion: policy.version,
+        ipAddress,
       },
       req,
     });
 
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message: `Policy "${policy.title}" (v${policyVersion}) acknowledged successfully.`,
-      acknowledgement,
+      message: `You have successfully acknowledged "${policy.title}" (Version ${policy.version}).`,
+      acknowledgement: {
+        ...acknowledgement,
+        _id: acknowledgement.id,
+      },
     });
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      message: 'Failed to record policy acknowledgement.',
+      message: 'Failed to acknowledge policy.',
       error: error.message,
     });
   }
@@ -408,28 +557,41 @@ export const acknowledgePolicy = async (req: AuthRequest, res: Response): Promis
 
 export const getPolicyAcknowledgements = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const policy = await Policy.findById(req.params.id);
-    if (!policy) {
-      res.status(404).json({ success: false, message: 'Policy not found.' });
-      return;
-    }
+    const policyId = req.params.id;
 
-    const acks = await PolicyAcknowledgement.find({ policyId: policy._id })
-      .populate('userId', 'fullName email employeeId department position site')
-      .sort({ acknowledgedAt: -1 });
-
-    const totalStaff = await User.countDocuments({ isActive: true });
-    const acknowledgedCount = acks.length;
-    const complianceRate = totalStaff > 0 ? Math.round((acknowledgedCount / totalStaff) * 100) : 0;
+    const acknowledgements = await prisma.policyAcknowledgement.findMany({
+      where: { policyId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            employeeId: true,
+            fullName: true,
+            email: true,
+            position: true,
+            department: { select: { id: true, name: true, site: true } },
+          },
+        },
+      },
+      orderBy: { acknowledgedAt: 'desc' },
+    });
 
     res.status(200).json({
       success: true,
-      policyTitle: policy.title,
-      policyVersion: policy.version,
-      acknowledgedCount,
-      totalStaff,
-      complianceRate,
-      acknowledgements: acks,
+      count: acknowledgements.length,
+      acknowledgements: acknowledgements.map((a) => ({
+        ...a,
+        _id: a.id,
+        user: a.user
+          ? {
+              ...a.user,
+              _id: a.user.id,
+              department: a.user.department
+                ? { ...a.user.department, _id: a.user.department.id }
+                : null,
+            }
+          : null,
+      })),
     });
   } catch (error: any) {
     res.status(500).json({

@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.authenticate = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const env_1 = require("../config/env");
-const User_1 = require("../models/User");
+const db_1 = require("../config/db");
 const authenticate = async (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
@@ -44,7 +44,10 @@ const authenticate = async (req, res, next) => {
             });
             return;
         }
-        const user = await User_1.User.findById(decoded.userId).populate('department');
+        const user = await db_1.prisma.user.findUnique({
+            where: { id: decoded.userId },
+            include: { department: true },
+        });
         if (!user) {
             res.status(401).json({
                 success: false,
@@ -59,14 +62,19 @@ const authenticate = async (req, res, next) => {
             });
             return;
         }
-        if (user.isLocked()) {
+        // Check account lockout
+        if (user.lockUntil && new Date(user.lockUntil).getTime() > Date.now()) {
             res.status(403).json({
                 success: false,
                 message: 'Account is temporarily locked due to failed login attempts.',
             });
             return;
         }
-        req.user = user;
+        // Attach user with compatibility _id
+        req.user = {
+            ...user,
+            _id: user.id,
+        };
         next();
     }
     catch (error) {

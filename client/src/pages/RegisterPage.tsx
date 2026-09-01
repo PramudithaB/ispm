@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { departmentService } from '../services/api';
-import { IDepartment } from '../types';
+import { IDepartment, UserRole } from '../types';
 import {
   Shield,
   Lock,
@@ -12,11 +12,11 @@ import {
   Eye,
   EyeOff,
   AlertCircle,
-  CheckCircle2,
-  KeyRound,
   ShieldCheck,
-  ArrowLeft,
   UserPlus,
+  BadgePercent,
+  MapPin,
+  Briefcase,
 } from 'lucide-react';
 
 export const RegisterPage: React.FC = () => {
@@ -24,14 +24,15 @@ export const RegisterPage: React.FC = () => {
   const { register } = useAuth();
 
   const [departments, setDepartments] = useState<IDepartment[]>([]);
-  const [employeeId, setEmployeeId] = useState<string>('HEM-STF-020');
   const [fullName, setFullName] = useState<string>('');
+  const [employeeId, setEmployeeId] = useState<string>('HEM-STF-020');
   const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
+  const [confirmPassword, setConfirmPassword] = useState<string>('');
+  const [role, setRole] = useState<UserRole>('STAFF');
   const [department, setDepartment] = useState<string>('');
-  const [position, setPosition] = useState<string>('Staff Nurse');
   const [site, setSite] = useState<string>('Hemas Hospital Wattala');
-  const [password, setPassword] = useState<string>('Password123!');
-  const [confirmPassword, setConfirmPassword] = useState<string>('Password123!');
+  const [position, setPosition] = useState<string>('Clinical Staff');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -57,13 +58,13 @@ export const RegisterPage: React.FC = () => {
     e.preventDefault();
     setErrorMessage('');
 
-    if (!employeeId || !fullName || !email || !password) {
-      setErrorMessage('Please fill in all required fields.');
+    if (!fullName.trim() || !employeeId.trim() || !email.trim() || !password) {
+      setErrorMessage('Please fill in all required fields marked with *.');
       return;
     }
 
     if (password !== confirmPassword) {
-      setErrorMessage('Passwords do not match.');
+      setErrorMessage('Passwords do not match. Please verify your password confirmation.');
       return;
     }
 
@@ -74,13 +75,15 @@ export const RegisterPage: React.FC = () => {
 
     setIsLoading(true);
     const res = await register({
-      employeeId,
-      fullName,
-      email,
-      department: department || undefined,
-      position,
-      site,
+      fullName: fullName.trim(),
+      employeeId: employeeId.trim(),
+      email: email.trim(),
       password,
+      confirmPassword,
+      role,
+      department: department || undefined,
+      site: site.trim(),
+      position: position.trim(),
     });
     setIsLoading(false);
 
@@ -97,19 +100,19 @@ export const RegisterPage: React.FC = () => {
       <div className="absolute -top-24 -right-24 w-96 h-96 bg-brand-500/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute -bottom-24 -left-24 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="sm:mx-auto sm:w-full sm:max-w-xl text-center z-10">
+      <div className="sm:mx-auto sm:w-full sm:max-w-2xl text-center z-10">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-xl shadow-brand-500/20 mb-3 ring-4 ring-white/10">
           <Shield className="w-8 h-8" />
         </div>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-          Hospital Staff Self-Registration
+          SecureHemas Staff Registration
         </h1>
         <p className="mt-1 text-xs sm:text-sm text-slate-300">
-          Enroll in the SecureHemas Information Security & Compliance Registry
+          Enroll in the Information Security Policy & Compliance Management System
         </p>
       </div>
 
-      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-xl z-10">
+      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-2xl z-10">
         <div className="bg-white/95 backdrop-blur-md py-8 px-6 shadow-2xl rounded-3xl sm:px-10 border border-white/20">
           {errorMessage && (
             <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5">
@@ -119,21 +122,8 @@ export const RegisterPage: React.FC = () => {
           )}
 
           <form className="space-y-4" onSubmit={handleSubmit}>
+            {/* Full Name & Employee ID */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Employee ID *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. HEM-STF-025"
-                  value={employeeId}
-                  onChange={(e) => setEmployeeId(e.target.value)}
-                  className="block w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-brand-500 focus:outline-none font-mono uppercase bg-white"
-                />
-              </div>
-
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                   Full Name *
@@ -152,74 +142,130 @@ export const RegisterPage: React.FC = () => {
                   />
                 </div>
               </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Hospital Email Address *
-              </label>
-              <div className="relative rounded-xl shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <Mail className="h-4 w-4" />
-                </div>
-                <input
-                  type="email"
-                  required
-                  placeholder="dilhani@securehemas.local"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="block w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Clinical Department
-                </label>
-                <select
-                  value={department}
-                  onChange={(e) => setDepartment(e.target.value)}
-                  className="block w-full px-3 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white"
-                >
-                  <option value="">None / Corporate</option>
-                  {departments.map((d) => (
-                    <option key={d._id} value={d._id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Clinical Position
+                  Employee ID *
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Staff Nurse, Lab Technician"
-                  value={position}
-                  onChange={(e) => setPosition(e.target.value)}
-                  className="block w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white"
+                  placeholder="e.g. HEM-STF-025"
+                  value={employeeId}
+                  onChange={(e) => setEmployeeId(e.target.value)}
+                  className="block w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-brand-500 focus:outline-none font-mono uppercase bg-white"
                 />
               </div>
             </div>
 
+            {/* Email Address & Role */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Hospital Email *
+                </label>
+                <div className="relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Mail className="h-4 w-4" />
+                  </div>
+                  <input
+                    type="email"
+                    required
+                    placeholder="dilhani@securehemas.local"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="block w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  System Role *
+                </label>
+                <div className="relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <ShieldCheck className="h-4 w-4" />
+                  </div>
+                  <select
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as UserRole)}
+                    className="block w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white font-medium"
+                  >
+                    <option value="STAFF">STAFF (Clinical / Nursing / Allied)</option>
+                    <option value="DEPARTMENT_HEAD">DEPARTMENT_HEAD (Head of Dept / Charge Nurse)</option>
+                    <option value="ADMIN">ADMIN (Hospital Administrator / Executive)</option>
+                    <option value="IT_SECURITY_ADMIN">IT_SECURITY_ADMIN (Cybersecurity Officer)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Department & Position */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Department
+                </label>
+                <div className="relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Building2 className="h-4 w-4" />
+                  </div>
+                  <select
+                    value={department}
+                    onChange={(e) => setDepartment(e.target.value)}
+                    className="block w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white"
+                  >
+                    <option value="">None / Corporate Administration</option>
+                    {departments.map((d) => (
+                      <option key={d._id} value={d._id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Position / Job Title
+                </label>
+                <div className="relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Briefcase className="h-4 w-4" />
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Senior Staff Nurse"
+                    value={position}
+                    onChange={(e) => setPosition(e.target.value)}
+                    className="block w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Hospital Site */}
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                 Hospital Facility Site
               </label>
-              <input
-                type="text"
-                required
-                value={site}
-                onChange={(e) => setSite(e.target.value)}
-                className="block w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white"
-              />
+              <div className="relative rounded-xl shadow-sm">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <MapPin className="h-4 w-4" />
+                </div>
+                <input
+                  type="text"
+                  required
+                  value={site}
+                  onChange={(e) => setSite(e.target.value)}
+                  className="block w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-500 focus:outline-none bg-white"
+                />
+              </div>
             </div>
 
+            {/* Password & Confirm Password */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <div className="flex items-center justify-between mb-1">
@@ -277,7 +323,7 @@ export const RegisterPage: React.FC = () => {
               {isLoading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Enrolling Account in Registry...</span>
+                  <span>Enrolling Account in MySQL Registry...</span>
                 </>
               ) : (
                 <>

@@ -1,18 +1,17 @@
 import app from './app';
-import { connectDB } from './config/db';
+import { connectDB, disconnectDB, prisma } from './config/db';
 import { config } from './config/env';
-import { User } from './models/User';
 import { seedDatabase } from './seed/seedData';
 
 const startServer = async () => {
   try {
-    console.log('🚀 Starting SecureHemas Backend Server...');
+    console.log('🚀 Starting SecureHemas Backend Server (MySQL + Prisma)...');
     await connectDB();
 
     // Auto-seed if database is completely empty
-    const userCount = await User.countDocuments();
+    const userCount = await prisma.user.count();
     if (userCount === 0) {
-      console.log('🌱 Empty database detected. Automatically seeding initial demonstration data...');
+      console.log('🌱 Empty database detected. Automatically seeding initial demonstration data into MySQL...');
       await seedDatabase();
     }
 
@@ -26,6 +25,7 @@ const startServer = async () => {
 ║  • REST API:     http://localhost:${config.port}/api                 ║
 ║  • Health Check: http://localhost:${config.port}/api/health          ║
 ║  • Client App:   ${config.clientUrl}                        ║
+║  • Database:     MySQL 26 (Prisma ORM)                        ║
 ║  • Environment:  ${config.nodeEnv.padEnd(44)}║
 ╚════════════════════════════════════════════════════════════════╝
       `);
@@ -33,8 +33,9 @@ const startServer = async () => {
 
     const shutdown = async () => {
       console.log('\n🛑 Gracefully shutting down SecureHemas server...');
-      server.close(() => {
-        console.log('HTTP server closed.');
+      server.close(async () => {
+        await disconnectDB();
+        console.log('HTTP server and MySQL connection closed.');
         process.exit(0);
       });
     };
