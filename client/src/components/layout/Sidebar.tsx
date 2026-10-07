@@ -67,6 +67,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
       show: true,
     },
     {
+      to: '/admin/registrations',
+      label: 'Staff Registrations',
+      icon: <Users className="w-5 h-5" />,
+      show: role === 'ADMIN' || role === 'IT_SECURITY_ADMIN',
+    },
+    {
+      to: '/departments',
+      label: 'Departments',
+      icon: <Building2 className="w-5 h-5" />,
+      show: role === 'ADMIN' || role === 'IT_SECURITY_ADMIN',
+    },
+    {
+      to: '/users',
+      label: 'Staff Directory',
+      icon: <Users className="w-5 h-5" />,
+      show: role === 'ADMIN' || role === 'IT_SECURITY_ADMIN' || role === 'DEPARTMENT_HEAD',
+    },
+    {
       to: '/reports',
       label: 'Reports',
       icon: <FileSpreadsheet className="w-5 h-5" />,

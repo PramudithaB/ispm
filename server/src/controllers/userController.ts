@@ -3,6 +3,8 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../config/db';
 import { AuthRequest } from '../middleware/auth';
 import { logAudit } from '../services/auditService';
+import { config } from '../config/env';
+import { sendAccountApprovedEmail, sendAccountRejectedEmail } from '../services/emailService';
 import { UserRole } from '@prisma/client';
 
 export const getUsers = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -283,3 +285,178 @@ export const unlockUser = async (req: AuthRequest, res: Response): Promise<void>
     });
   }
 };
+
+// ==========================================
+// GET PENDING STAFF REGISTRATIONS
+// Admin / IT Security Admin review queue
+// ==========================================
+export const getPendingRegistrations = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const pendingUsers = await prisma.user.findMany({
+      where: {
+        accountStatus: 'PENDING',
+      },
+      select: {
+        id: true,
+        employeeId: true,
+        fullName: true,
+        email: true,
+        role: true,
+        departmentId: true,
+        department: true,
+        site: true,
+        position: true,
+        isActive: true,
+        emailVerified: true,
+        accountStatus: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.status(200).json({
+      success: true,
+      count: pendingUsers.length,
+      registrations: pendingUsers.map((u) => ({
+        ...u,
+        _id: u.id,
+        department: u.department ? { ...u.department, _id: u.department.id } : null,
+      })),
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve pending registrations.',
+      error: error.message,
+    });
+  }
+};
+
+// ==========================================
+// APPROVE STAFF REGISTRATION
+// Sets accountStatus = 'ACTIVE', isActive = true
+// ==========================================
+export const approveRegistration = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.params.id;
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { department: true },
+    });
+
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User registration record not found.' });
+      return;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        accountStatus: 'ACTIVE',
+        isActive: true,
+      },
+      include: { department: true },
+    });
+
+    // Send account approved confirmation email
+    const loginUrl = `${config.clientUrl}/login`;
+    await sendAccountApprovedEmail(updatedUser.email, updatedUser.fullName, loginUrl);
+
+    await logAudit({
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      userRole: req.user!.role,
+      action: 'STAFF_REGISTRATION_APPROVED',
+      module: 'USERS',
+      entityId: updatedUser.id,
+      metadata: {
+        approvedUserEmail: updatedUser.email,
+        employeeId: updatedUser.employeeId,
+      },
+      req,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Staff registration for ${updatedUser.fullName} (${updatedUser.email}) approved successfully.`,
+      user: {
+        ...updatedUser,
+        _id: updatedUser.id,
+        department: updatedUser.department ? { ...updatedUser.department, _id: updatedUser.department.id } : null,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to approve staff registration.',
+      error: error.message,
+    });
+  }
+};
+
+// ==========================================
+// REJECT STAFF REGISTRATION
+// Sets accountStatus = 'REJECTED', isActive = false
+// ==========================================
+export const rejectRegistration = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.params.id;
+    const { reason } = req.body;
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { department: true },
+    });
+
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User registration record not found.' });
+      return;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        accountStatus: 'REJECTED',
+        isActive: false,
+      },
+      include: { department: true },
+    });
+
+    // Send rejection notice email
+    await sendAccountRejectedEmail(updatedUser.email, updatedUser.fullName, reason);
+
+    await logAudit({
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      userRole: req.user!.role,
+      action: 'STAFF_REGISTRATION_REJECTED',
+      module: 'USERS',
+      entityId: updatedUser.id,
+      metadata: {
+        rejectedUserEmail: updatedUser.email,
+        employeeId: updatedUser.employeeId,
+        reason: reason || 'Not specified',
+      },
+      req,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Staff registration for ${updatedUser.fullName} (${updatedUser.email}) has been rejected.`,
+      user: {
+        ...updatedUser,
+        _id: updatedUser.id,
+        department: updatedUser.department ? { ...updatedUser.department, _id: updatedUser.department.id } : null,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reject staff registration.',
+      error: error.message,
+    });
+  }
+};
+

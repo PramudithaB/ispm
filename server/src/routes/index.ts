@@ -23,6 +23,22 @@ router.use('/notifications', notificationRoutes);
 router.use('/audit-logs', auditRoutes);
 router.use('/reports', reportRoutes);
 
+// Real test email endpoint (Development & Diagnostics)
+router.post('/test-email', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    res.status(400).json({ success: false, message: 'Email address is required.' });
+    return;
+  }
+  const { sendTestEmail } = await import('../services/emailService');
+  const result = await sendTestEmail(email);
+  if (result.success) {
+    res.status(200).json(result);
+  } else {
+    res.status(500).json(result);
+  }
+});
+
 // Health check endpoints
 router.get('/health', (req, res) => {
   res.status(200).json({

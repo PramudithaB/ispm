@@ -81,6 +81,8 @@ export const seedDatabase = async (): Promise<void> => {
         site: 'Hemas Hospital Wattala',
         position: 'Chief Medical Information Officer & Compliance Lead',
         isActive: true,
+        emailVerified: true,
+        accountStatus: 'ACTIVE',
       },
     });
 
@@ -95,6 +97,8 @@ export const seedDatabase = async (): Promise<void> => {
         site: 'Hemas Hospital Wattala',
         position: 'Lead Cybersecurity & Information Protection Officer',
         isActive: true,
+        emailVerified: true,
+        accountStatus: 'ACTIVE',
       },
     });
 
@@ -109,6 +113,8 @@ export const seedDatabase = async (): Promise<void> => {
         site: 'Hemas Hospital Wattala',
         position: 'Head of Emergency & Trauma Services',
         isActive: true,
+        emailVerified: true,
+        accountStatus: 'ACTIVE',
       },
     });
 
@@ -123,6 +129,8 @@ export const seedDatabase = async (): Promise<void> => {
         site: 'Hemas Hospital Wattala',
         position: 'Senior Nursing Officer',
         isActive: true,
+        emailVerified: true,
+        accountStatus: 'ACTIVE',
       },
     });
 
@@ -137,6 +145,8 @@ export const seedDatabase = async (): Promise<void> => {
         site: 'Hemas Hospital Wattala',
         position: 'Emergency Triage Nurse',
         isActive: true,
+        emailVerified: true,
+        accountStatus: 'ACTIVE',
       },
     });
 
@@ -151,6 +161,8 @@ export const seedDatabase = async (): Promise<void> => {
         site: 'Hemas Hospital Wattala',
         position: 'Senior Radiographer & PACS Operator',
         isActive: true,
+        emailVerified: true,
+        accountStatus: 'ACTIVE',
       },
     });
 
@@ -165,6 +177,8 @@ export const seedDatabase = async (): Promise<void> => {
         site: 'Hemas Hospital Wattala',
         position: 'Senior Clinical Pharmacist',
         isActive: true,
+        emailVerified: true,
+        accountStatus: 'ACTIVE',
       },
     });
 
@@ -179,6 +193,43 @@ export const seedDatabase = async (): Promise<void> => {
         site: 'Hemas Hospital Wattala',
         position: 'Billing & Patient Insurance Executive',
         isActive: true,
+        emailVerified: true,
+        accountStatus: 'ACTIVE',
+      },
+    });
+
+    // Seed Demo Pending Staff Registrations
+    const pendingStaffTharindu = await prisma.user.create({
+      data: {
+        employeeId: 'HEM-STF-006',
+        fullName: 'Dr. Tharindu Jayasuriya',
+        email: 'tharindu.jayasuriya@securehemas.local',
+        passwordHash,
+        role: 'STAFF',
+        departmentId: deptER.id,
+        site: 'Hemas Hospital Wattala',
+        position: 'Resident Medical Officer',
+        isActive: false,
+        emailVerified: true,
+        accountStatus: 'PENDING',
+      },
+    });
+
+    const pendingStaffKavindi = await prisma.user.create({
+      data: {
+        employeeId: 'HEM-STF-007',
+        fullName: 'Kavindi Perera',
+        email: 'kavindi.nurse@securehemas.local',
+        passwordHash,
+        role: 'STAFF',
+        departmentId: deptNursing.id,
+        site: 'Hemas Hospital Wattala',
+        position: 'ICU Staff Nurse',
+        isActive: false,
+        emailVerified: false,
+        accountStatus: 'PENDING',
+        verificationToken: 'demo_kavindi_verification_token_123',
+        verificationTokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000),
       },
     });
 

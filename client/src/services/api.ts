@@ -41,6 +41,11 @@ export const authService = {
   logout: () => api.post('/auth/logout'),
   getMe: () => api.get('/auth/me'),
   updateProfile: (data: any) => api.put('/auth/profile', data),
+  verifyEmail: (token: string) => api.post('/auth/verify-email', { token }),
+  resendVerification: (email: string) => api.post('/auth/resend-verification', { email }),
+  forgotPassword: (email: string) => api.post('/auth/forgot-password', { email }),
+  resetPassword: (data: { token: string; password: string; confirmPassword?: string }) =>
+    api.post('/auth/reset-password', data),
 };
 
 // Users API
@@ -50,6 +55,10 @@ export const userService = {
   createUser: (data: any) => api.post('/users', data),
   updateUser: (id: string, data: any) => api.put(`/users/${id}`, data),
   unlockUser: (id: string) => api.post(`/users/${id}/unlock`),
+  getPendingRegistrations: () => api.get('/users/pending-registrations'),
+  approveRegistration: (id: string) => api.post(`/users/${id}/approve`),
+  rejectRegistration: (id: string, data?: { reason?: string }) =>
+    api.post(`/users/${id}/reject`, data),
 };
 
 // Departments API

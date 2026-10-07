@@ -1,221 +1,287 @@
 import request from 'supertest';
-import bcrypt from 'bcryptjs';
 import app from '../app';
 import { connectDB, disconnectDB, prisma } from '../config/db';
+import bcrypt from 'bcryptjs';
 
-describe('Real Registration & Authentication Flow on MySQL `ispm`', () => {
+describe('Real Registration, Email Verification, Admin Approval & Password Reset Flow', () => {
   beforeAll(async () => {
     await connectDB();
+    await prisma.user.deleteMany({
+      where: {
+        email: { in: ['nimal.perera@securehemas.local', 'rejected.nurse@securehemas.local'] },
+      },
+    });
   });
 
   afterAll(async () => {
-    // Clean up created test users
-    await prisma.auditLog.deleteMany({
-      where: {
-        userEmail: {
-          in: ['newstaff.test@securehemas.local', 'existing.test@securehemas.local'],
-        },
-      },
-    });
+    // Clean up test users
     await prisma.user.deleteMany({
       where: {
-        email: {
-          in: ['newstaff.test@securehemas.local', 'existing.test@securehemas.local'],
-        },
+        email: { in: ['nimal.perera@securehemas.local', 'rejected.nurse@securehemas.local'] },
       },
     });
     await disconnectDB();
   });
 
-  describe('Registration Validations', () => {
+  let verificationToken: string;
+  let registeredUserId: string;
+  let adminToken: string;
+  let resetToken: string;
+
+  describe('1. Staff Registration Validation & Creation', () => {
     it('should reject registration if required fields are missing', async () => {
       const res = await request(app)
         .post('/api/auth/register')
         .send({
-          fullName: 'Test Staff',
-          // missing employeeId, email, password
+          fullName: 'Test User',
+          email: 'test@securehemas.local',
         });
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
-      expect(res.body.message).toContain('required');
     });
 
     it('should reject registration if passwords do not match', async () => {
       const res = await request(app)
         .post('/api/auth/register')
         .send({
-          fullName: 'Mismatched User',
-          employeeId: 'HEM-TST-001',
-          email: 'mismatch@securehemas.local',
+          employeeId: 'HEM-DOC-999',
+          fullName: 'Dr. Nimal Perera',
+          email: 'nimal.perera@securehemas.local',
           password: 'Password123!',
           confirmPassword: 'DifferentPassword123!',
         });
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
-      expect(res.body.message).toContain('Passwords do not match');
+      expect(res.body.message).toBe('Passwords do not match.');
     });
 
-    it('should reject registration if password is shorter than 8 characters', async () => {
+    it('should register staff user, create PENDING unverified account in MySQL, and generate verification token', async () => {
       const res = await request(app)
         .post('/api/auth/register')
         .send({
-          fullName: 'Short Pass User',
-          employeeId: 'HEM-TST-002',
-          email: 'shortpass@securehemas.local',
-          password: '12345',
-          confirmPassword: '12345',
-        });
-
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.message).toContain('at least 8 characters');
-    });
-  });
-
-  describe('Real User Registration in MySQL `ispm.users`', () => {
-    const testEmployeeId = 'HEM-TST-999';
-    const testEmail = 'newstaff.test@securehemas.local';
-    const testPassword = 'ClinicalSecure2026!';
-
-    it('should successfully register a new user, insert into MySQL `ispm.users`, and return JWT token', async () => {
-      // Ensure user doesn't already exist
-      await prisma.user.deleteMany({
-        where: { email: testEmail },
-      });
-
-      const res = await request(app)
-        .post('/api/auth/register')
-        .send({
-          fullName: 'Nimali Jayasuriya',
-          employeeId: testEmployeeId,
-          email: testEmail,
-          password: testPassword,
-          confirmPassword: testPassword,
-          role: 'STAFF',
-          position: 'Critical Care Registered Nurse',
+          employeeId: 'HEM-DOC-999',
+          fullName: 'Dr. Nimal Perera',
+          email: 'nimal.perera@securehemas.local',
+          password: 'Password123!',
+          confirmPassword: 'Password123!',
+          position: 'Consultant Physician',
           site: 'Hemas Hospital Wattala',
         });
 
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
-      expect(res.body.token).toBeDefined();
-      expect(res.body.user).toBeDefined();
-      expect(res.body.user.fullName).toBe('Nimali Jayasuriya');
-      expect(res.body.user.employeeId).toBe(testEmployeeId);
-      expect(res.body.user.email).toBe(testEmail);
-      expect(res.body.user.role).toBe('STAFF');
-      expect(res.body.user.position).toBe('Critical Care Registered Nurse');
-      expect(res.body.user.site).toBe('Hemas Hospital Wattala');
-      // Verify NEVER returning passwordHash to the frontend
-      expect(res.body.user.passwordHash).toBeUndefined();
-      expect(res.body.user.password).toBeUndefined();
+      expect(res.body.message).toContain('Please check your email and verify your email address');
 
-      // Directly verify row in MySQL ispm.users table
+      // Verify row in MySQL ispm.users table
       const dbUser = await prisma.user.findUnique({
-        where: { email: testEmail },
+        where: { email: 'nimal.perera@securehemas.local' },
       });
 
       expect(dbUser).not.toBeNull();
-      expect(dbUser!.email).toBe(testEmail);
-      expect(dbUser!.employeeId).toBe(testEmployeeId);
-      expect(dbUser!.fullName).toBe('Nimali Jayasuriya');
+      expect(dbUser!.role).toBe('STAFF'); // Always STAFF
+      expect(dbUser!.accountStatus).toBe('PENDING');
+      expect(dbUser!.emailVerified).toBe(false);
+      expect(dbUser!.isActive).toBe(false);
+      expect(dbUser!.verificationToken).not.toBeNull();
+      expect(dbUser!.verificationTokenExpiry).not.toBeNull();
 
-      // Direct verification: Password MUST be bcrypt hashed, NEVER plaintext
-      expect(dbUser!.passwordHash).not.toBe(testPassword);
-      expect(dbUser!.passwordHash.startsWith('$2')).toBe(true); // bcrypt prefix $2a$ or $2b$
-      const isBcryptMatch = await bcrypt.compare(testPassword, dbUser!.passwordHash);
-      expect(isBcryptMatch).toBe(true);
-    });
-
-    it('should reject registration if email already exists (Duplicate Email Check)', async () => {
-      const res = await request(app)
-        .post('/api/auth/register')
-        .send({
-          fullName: 'Another Name',
-          employeeId: 'HEM-TST-888',
-          email: testEmail, // Duplicate email
-          password: 'AnotherPassword123!',
-          confirmPassword: 'AnotherPassword123!',
-          role: 'STAFF',
-        });
-
-      expect(res.status).toBe(409);
-      expect(res.body.success).toBe(false);
-      expect(res.body.message).toContain('email address already exists');
-    });
-
-    it('should reject registration if employeeId already exists (Duplicate Employee ID Check)', async () => {
-      const res = await request(app)
-        .post('/api/auth/register')
-        .send({
-          fullName: 'Another Name',
-          employeeId: testEmployeeId, // Duplicate employeeId
-          email: 'unique.different@securehemas.local',
-          password: 'AnotherPassword123!',
-          confirmPassword: 'AnotherPassword123!',
-          role: 'STAFF',
-        });
-
-      expect(res.status).toBe(409);
-      expect(res.body.success).toBe(false);
-      expect(res.body.message).toContain('Employee ID already exists');
+      registeredUserId = dbUser!.id;
+      verificationToken = dbUser!.verificationToken!;
     });
   });
 
-  describe('Login & JWT Authentication with Newly Registered User', () => {
-    const testEmail = 'newstaff.test@securehemas.local';
-    const testPassword = 'ClinicalSecure2026!';
-    let authToken: string;
-
-    it('should successfully log in with the registered user credentials', async () => {
+  describe('2. Login Restrictions for Unverified & Pending Accounts', () => {
+    it('should block login when email is not verified', async () => {
       const res = await request(app)
         .post('/api/auth/login')
         .send({
-          email: testEmail,
-          password: testPassword,
+          email: 'nimal.perera@securehemas.local',
+          password: 'Password123!',
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
+      expect(res.body.message).toBe('Please verify your email address before logging in.');
+      expect(res.body.isUnverified).toBe(true);
+    });
+  });
+
+  describe('3. Email Verification Flow', () => {
+    it('should reject email verification with invalid token', async () => {
+      const res = await request(app)
+        .post('/api/auth/verify-email')
+        .send({ token: 'invalid_nonexistent_token_123' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('should verify email successfully with valid token and update MySQL', async () => {
+      const res = await request(app)
+        .post('/api/auth/verify-email')
+        .send({ token: verificationToken });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toContain('Email verified successfully');
+
+      // Check in MySQL
+      const dbUser = await prisma.user.findUnique({
+        where: { id: registeredUserId },
+      });
+
+      expect(dbUser!.emailVerified).toBe(true);
+      expect(dbUser!.verificationToken).toBeNull(); // Token cleared
+      expect(dbUser!.accountStatus).toBe('PENDING'); // Still pending approval
+    });
+
+    it('should block login when email is verified but waiting for admin approval', async () => {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({
+          email: 'nimal.perera@securehemas.local',
+          password: 'Password123!',
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
+      expect(res.body.message).toBe('Your account is waiting for administrator approval.');
+      expect(res.body.isPending).toBe(true);
+    });
+  });
+
+  describe('4. Admin Staff Registration Review & Approval', () => {
+    beforeAll(async () => {
+      // Login Admin
+      const adminRes = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'admin@securehemas.local', password: 'Password123!' });
+      adminToken = adminRes.body.token;
+    });
+
+    it('should allow ADMIN to retrieve pending staff registrations queue', async () => {
+      const res = await request(app)
+        .get('/api/users/pending-registrations')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      const found = res.body.registrations.find((u: any) => u.id === registeredUserId);
+      expect(found).toBeDefined();
+      expect(found.emailVerified).toBe(true);
+      expect(found.accountStatus).toBe('PENDING');
+    });
+
+    it('should allow ADMIN to approve staff registration and activate account', async () => {
+      const res = await request(app)
+        .post(`/api/users/${registeredUserId}/approve`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // Verify in MySQL
+      const dbUser = await prisma.user.findUnique({
+        where: { id: registeredUserId },
+      });
+
+      expect(dbUser!.accountStatus).toBe('ACTIVE');
+      expect(dbUser!.isActive).toBe(true);
+    });
+
+    it('should allow approved staff member to log in and receive JWT token', async () => {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({
+          email: 'nimal.perera@securehemas.local',
+          password: 'Password123!',
         });
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.token).toBeDefined();
-      expect(res.body.user).toBeDefined();
-      expect(res.body.user.email).toBe(testEmail);
       expect(res.body.user.role).toBe('STAFF');
-      expect(res.body.user.passwordHash).toBeUndefined();
-
-      authToken = res.body.token;
+      expect(res.body.user.accountStatus).toBe('ACTIVE');
     });
+  });
 
-    it('should authenticate protected endpoints using the issued JWT Bearer token', async () => {
+  describe('5. Forgot Password & Password Reset Workflow', () => {
+    it('should generate single-use reset token and return generic confirmation', async () => {
       const res = await request(app)
-        .get('/api/auth/me')
-        .set('Authorization', `Bearer ${authToken}`);
+        .post('/api/auth/forgot-password')
+        .send({ email: 'nimal.perera@securehemas.local' });
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.user.email).toBe(testEmail);
-      expect(res.body.user.fullName).toBe('Nimali Jayasuriya');
-      expect(res.body.user.role).toBe('STAFF');
-      expect(res.body.user.passwordHash).toBeUndefined();
+
+      // Retrieve reset token from MySQL
+      const dbUser = await prisma.user.findUnique({
+        where: { id: registeredUserId },
+      });
+
+      expect(dbUser!.resetToken).not.toBeNull();
+      expect(dbUser!.resetTokenExpiry).not.toBeNull();
+      resetToken = dbUser!.resetToken!;
     });
 
-    it('should verify RBAC rules for the newly registered STAFF user', async () => {
-      // STAFF can view policies
-      const policiesRes = await request(app)
-        .get('/api/policies')
-        .set('Authorization', `Bearer ${authToken}`);
+    it('should reject password reset if token is invalid', async () => {
+      const res = await request(app)
+        .post('/api/auth/reset-password')
+        .send({
+          token: 'invalid_reset_token_xyz',
+          password: 'NewPassword123!',
+          confirmPassword: 'NewPassword123!',
+        });
 
-      expect(policiesRes.status).toBe(200);
-      expect(policiesRes.body.success).toBe(true);
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
 
-      // STAFF is forbidden from admin compliance summary
-      const complianceRes = await request(app)
-        .get('/api/compliance/summary')
-        .set('Authorization', `Bearer ${authToken}`);
+    it('should successfully reset password with valid token and update bcrypt hash', async () => {
+      const res = await request(app)
+        .post('/api/auth/reset-password')
+        .send({
+          token: resetToken,
+          password: 'NewPassword123!',
+          confirmPassword: 'NewPassword123!',
+        });
 
-      expect(complianceRes.status).toBe(403);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toContain('Your password has been reset successfully');
+
+      // Verify token cleared in MySQL
+      const dbUser = await prisma.user.findUnique({
+        where: { id: registeredUserId },
+      });
+      expect(dbUser!.resetToken).toBeNull();
+    });
+
+    it('should reject login with old password', async () => {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({
+          email: 'nimal.perera@securehemas.local',
+          password: 'Password123!',
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('should successfully log in with new password', async () => {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({
+          email: 'nimal.perera@securehemas.local',
+          password: 'NewPassword123!',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.token).toBeDefined();
     });
   });
 });

@@ -6,6 +6,9 @@ import { AppLayout } from './components/layout/AppLayout';
 
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
+import { VerifyEmailPage } from './pages/VerifyEmailPage';
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { PoliciesPage } from './pages/PoliciesPage';
 import { PolicyDetailPage } from './pages/PolicyDetailPage';
@@ -15,6 +18,7 @@ import { QuizPage } from './pages/QuizPage';
 import { CompliancePage } from './pages/CompliancePage';
 import { IncidentsPage } from './pages/IncidentsPage';
 import { UsersPage } from './pages/UsersPage';
+import { StaffRegistrationsPage } from './pages/StaffRegistrationsPage';
 import { DepartmentsPage } from './pages/DepartmentsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
@@ -26,9 +30,12 @@ export const App: React.FC = () => {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
-          {/* Public Routes */}
+          {/* Public Authentication Routes */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
 
           {/* Protected Application Routes */}
           <Route
@@ -52,6 +59,14 @@ export const App: React.FC = () => {
               element={
                 <ProtectedRoute allowedRoles={['ADMIN', 'IT_SECURITY_ADMIN', 'DEPARTMENT_HEAD']}>
                   <UsersPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/registrations"
+              element={
+                <ProtectedRoute allowedRoles={['ADMIN', 'IT_SECURITY_ADMIN']}>
+                  <StaffRegistrationsPage />
                 </ProtectedRoute>
               }
             />

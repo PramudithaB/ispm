@@ -14,6 +14,12 @@ enum UserRole {
   IT_SECURITY_ADMIN
 }
 
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+}
+
 model Department {
   id          String   @id @default(uuid())
   name        String   @unique
@@ -30,21 +36,27 @@ model Department {
 }
 
 model User {
-  id                  String    @id @default(uuid())
-  employeeId          String    @unique
-  fullName            String
-  email               String    @unique
-  passwordHash        String
-  role                UserRole  @default(STAFF)
-  departmentId        String?
-  department          Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  site                String    @default("Hemas Hospital Wattala")
-  position            String    @default("Clinical Staff")
-  isActive            Boolean   @default(true)
-  failedLoginAttempts Int       @default(0)
-  lockUntil           DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  id                      String         @id @default(uuid())
+  employeeId              String         @unique
+  fullName                String
+  email                   String         @unique
+  passwordHash            String
+  role                    UserRole       @default(STAFF)
+  departmentId            String?
+  department              Department?    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  site                    String         @default("Hemas Hospital Wattala")
+  position                String         @default("Clinical Staff")
+  isActive                Boolean        @default(true)
+  emailVerified           Boolean        @default(false)
+  accountStatus           AccountStatus  @default(PENDING)
+  verificationToken       String?        @unique
+  verificationTokenExpiry DateTime?
+  resetToken              String?        @unique
+  resetTokenExpiry        DateTime?
+  failedLoginAttempts     Int            @default(0)
+  lockUntil               DateTime?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
 
   createdPolicies         Policy[]                @relation("PolicyCreatedBy")
   updatedPolicies         Policy[]                @relation("PolicyUpdatedBy")
@@ -60,6 +72,7 @@ model User {
 
   @@index([role])
   @@index([departmentId])
+  @@index([accountStatus])
   @@map("users")
 }
 

@@ -20,6 +20,8 @@ export interface IUser {
   site: string;
   position: string;
   isActive: boolean;
+  emailVerified?: boolean;
+  accountStatus?: 'PENDING' | 'ACTIVE' | 'REJECTED';
   failedLoginAttempts?: number;
   lockUntil?: string | null;
   createdAt?: string;

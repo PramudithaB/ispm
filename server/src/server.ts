@@ -2,11 +2,15 @@ import app from './app';
 import { connectDB, disconnectDB, prisma } from './config/db';
 import { config } from './config/env';
 import { seedDatabase } from './seed/seedData';
+import { verifyEmailConfiguration } from './services/emailService';
 
 const startServer = async () => {
   try {
     console.log('🚀 Starting SecureHemas Backend Server (MySQL + Prisma)...');
     await connectDB();
+
+    // Verify Email SMTP Configuration on startup
+    await verifyEmailConfiguration();
 
     // Auto-seed if database is completely empty
     const userCount = await prisma.user.count();

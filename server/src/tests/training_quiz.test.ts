@@ -143,7 +143,7 @@ describe('Training & Quiz Module Full Workflow Tests', () => {
       // Verify in MySQL
       const dbQuiz = await prisma.quiz.findUnique({
         where: { trainingModuleId: createdModuleId },
-        include: { questions: true },
+        include: { questions: { orderBy: { orderIndex: 'asc' } } },
       });
       expect(dbQuiz).not.toBeNull();
       expect(dbQuiz!.questions.length).toBe(2);
